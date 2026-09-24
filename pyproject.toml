@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-marl-base"
+version = "0.1.0"
+description = "A locally implemented and extensible base for multi-agent reinforcement learning."
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4,<3.0",
+    "numpy>=1.26,<3.0",
+    "gymnasium>=1.0,<2.0",
+    "PyYAML>=6.0,<7.0",
+    "tensorboard>=2.16,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-cov>=5.0,<7.0",
+    "ruff>=0.8,<1.0",
+    "mypy>=1.13,<2.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["marl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+
