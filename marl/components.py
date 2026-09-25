@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from torch import Tensor, nn
 
@@ -73,7 +73,7 @@ class ExperienceSource(Protocol):
 class UpdatePlan(Protocol):
     """控制参数组、mini-batch 与优化器更新顺序。"""
 
-    def update(self, algorithm: nn.Module, batches: Iterable[MARLBatch]) -> Mapping[str, float]: ...
+    def update(self, algorithm: nn.Module, experience: Any) -> Mapping[str, float]: ...
 
 
 @runtime_checkable
