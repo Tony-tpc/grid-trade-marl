@@ -4,6 +4,10 @@
 思想，但网络、模块、数据协议、更新工具都由本项目实现，后续修改论文算法时不依赖
 外部框架内部逻辑。
 
+本 README 面向使用者和首次维护者，说明模块职责以及“应该在哪里修改”。如果要让
+自动化 Agent 或后续开发者严格实施一篇新论文，请同时阅读
+[`AGENTS.md`](AGENTS.md)：其中包含论文审计、扩展决策、张量语义、测试和 Git 门禁。
+
 ## 环境
 
 根目录已创建 Python 3.11 虚拟环境 `.venv`，并安装 `requirements-dev.txt`。PowerShell：
@@ -28,10 +32,17 @@ python examples\minimal_usage.py
 当前刻意不安装 `torchrl`、`tensordict`、`benchmarl`、`torch-geometric`。如需对接，
 应添加 adapter；算法核心仍保留在本地。
 
-## 分层结构
+## 完整模块地图
 
 ```text
 marl/
+├── core/
+│   ├── batch.py            # 统一训练数据 MARLBatch
+│   └── output.py           # 统一模型输出 MARLModelOutput
+├── envs/
+│   ├── base.py             # EnvironmentSpec/Step/Adapter
+│   ├── config.py           # 旧算法的环境配置工厂
+│   └── *_adapter.py        # 环境动作与公共动作协议之间的转换
 ├── models/
 │   ├── base.py             # 所有 Backbone 的抽象接口
 │   ├── mlp.py              # 向量观测 MLP
@@ -43,32 +54,197 @@ marl/
 │   ├── critic.py           # 独立/集中式 Critic
 │   ├── mixer.py            # VDNMixer / QMixer
 │   └── action_head.py      # 离散与 tanh-Gaussian 动作分布
-└── algorithms/
-    ├── base.py             # 所有算法共同生命周期
-    ├── maac.py
-    ├── maddpg.py
-    ├── mappo.py
-    ├── masac.py
-    └── qmix.py
+├── algorithms/
+│   ├── base.py             # 所有算法共同生命周期
+│   ├── maac.py
+│   ├── maddpg.py
+│   ├── mappo.py
+│   ├── masac.py
+│   └── qmix.py
+├── training/
+│   └── on_policy.py        # RolloutBuffer、PPOUpdatePlan、OnPolicyTrainer
+├── components.py           # 六类平级组件协议
+├── policies.py             # 可复用策略拓扑
+├── objectives.py           # PPO/value/entropy 目标与 LossBundle
+├── returns.py              # GAE 等 return estimator
+├── registry.py             # 显式分类注册表
+├── recipes.py              # Python/YAML recipe 和编译校验
+├── builtins.py             # 内置组件的严格构造工厂
+└── runtime.py              # 设备、向量环境、离策略 replay/运行设施
 ```
 
-此外 `marl/core/` 定义跨层使用的 `MARLBatch` 和统一模型输出。
+仓库根目录的其他部分：
+
+| 路径 | 含义 |
+|---|---|
+| `examples/` | 可直接运行的最小训练脚本和 YAML recipe |
+| `tests/` | 数学、形状、语义、checkpoint 和端到端回归 |
+| `marl/envs/README.md` | 环境与 adapter 的详细说明 |
+| `marl/algorithms/README.md` | MARL/PyTorch 概念、张量形状和算法差异 |
+| `AGENTS.md` | 后续论文实现和代码审查的强制工程约定 |
+
+### 各层如何协作
+
+```text
+EnvironmentAdapter.spec ──> EnvironmentSpec ──> compile recipe
+          │                                      │
+          ▼                                      ▼
+ EnvironmentStep ──> rollout/replay ──> MARLBatch ──> Algorithm
+                                                   │
+               policy + critic + objectives <──────┤
+                                                   ▼
+                                    UpdatePlan / optimizer
+```
+
+- `EnvironmentSpec` 描述静态能力与尺寸，不包含训练超参数。
+- `MARLBatch` 是环境、缓冲区、算法和 trainer 之间的公共数据语言。
+- model 只做表示学习，module 负责 Actor/Critic/Mixer 等网络角色。
+- component 表达可替换机制，recipe 只选择组件与超参数。
+- algorithm 是薄装配类；trainer/update plan 管理数据生命周期和参数更新。
+
+## 修改导航：先判断改哪一层
+
+| 需求 | 首选修改位置 | 通常不需要做的事 |
+|---|---|---|
+| 调学习率、clip ratio、hidden size | Python/YAML recipe | 新建算法类 |
+| 换已有 policy/critic/objective 的组合 | recipe | 复制 `mappo.py` |
+| 新增 loss 或正则项 | `objectives.py` + registry | 覆写整套训练循环 |
+| 新增 GAE/V-trace/n-step | `returns.py` + registry | 修改环境 |
+| 换 MLP 为 GRU/GNN/Transformer | `models/`、policy factory | 修改奖励 |
+| 新动作分布或参数共享拓扑 | `modules/action_head.py`、`policies.py` | 把编码写入 trainer |
+| 新市场/机器人/博弈环境 | `envs/` + adapter | 修改通用算法 |
+| 新 replay/rollout 数据生命周期 | experience source、`training/` | 按算法名硬编码分支 |
+| 新 optimizer 更新顺序 | UpdatePlan | 在算法中调用 `optimizer.step()` |
+| 全新且无法组合表达的算法 | `algorithms/` | 增加二级算法基类 |
+
+最重要的判断规则是：**只重新组合已有机制时写 recipe；只有出现新的数学机制时才写
+组件；只有组件和训练计划都无法表达时才写新的具体算法类。**
+
+## 公共数据约定
+
+| 数据 | 形状 | 说明 |
+|---|---|---|
+| observations | `[*B,N,O]` | 每个智能体的局部观测 |
+| state | `[*B,S]` | 集中训练使用的全局状态 |
+| discrete actions | `[*B,N]` | 每个智能体一个动作编号 |
+| continuous actions | `[*B,N,A]` | 每个智能体一个动作向量 |
+| rewards | `[*B,N]` | 默认保留逐智能体奖励 |
+| value/advantage/return | `[*B,N]` | 不跨智能体平均 |
+| action mask | `[*B,N,A]` | `True` 表示离散动作合法 |
+
+`*B` 可以包含 batch、并行环境或时间维。自然终止 `terminated` 会阻止 bootstrap；
+时间限制 `truncated` 保留当前下一状态的 bootstrap，但不能让 advantage 穿过 episode
+边界继续递推。新增算法和环境必须保持这两个标记分离。
+
+## 如何新增环境
+
+新增论文环境时，一般不需要修改算法：
+
+1. 在 `marl/envs/` 实现环境本体或包装第三方环境；
+2. 实现 `EnvironmentAdapter.spec/reset/step`；
+3. 在 adapter 中完成动作编解码、观测整理和奖励语义转换；
+4. 每次返回 `EnvironmentStep` 前调用 `validate_step()`；
+5. 明确奖励是 `INDIVIDUAL` 还是 `SHARED`；
+6. 增加 reset、step、seed、动作边界、奖励和终止测试。
+
+最小结构：
+
+```python
+class NewPaperAdapter(EnvironmentAdapter):
+    @property
+    def spec(self) -> EnvironmentSpec:
+        return EnvironmentSpec(
+            num_agents=self.environment.num_agents,
+            observation_dim=self.environment.observation_dim,
+            action_dim=self.environment.action_dim,
+            state_dim=self.environment.state_dim,
+            action_kind=ActionKind.DISCRETE,
+            horizon=self.environment.horizon,
+            reward_structure=RewardStructure.INDIVIDUAL,
+        )
+
+    def reset(self, seed=None) -> EnvironmentStep:
+        return self.validate_step(self._convert(self.environment.reset(seed=seed)))
+
+    def step(self, actions) -> EnvironmentStep:
+        native_actions = self._decode_actions(actions)
+        return self.validate_step(self._convert(self.environment.step(native_actions)))
+```
+
+环境尺寸只能来自 `adapter.spec`，不能在 recipe 中手写。异质动作、混合动作或可变数量
+智能体不是简单 adapter 转换就能解决的问题，还需要相应 policy/action head 能力。
+
+## 如何新增算法变体
+
+### 情况一：只需要新 recipe
+
+如果需要的组件都已存在，复制并修改
+[`examples/configs/mappo.yaml`](examples/configs/mappo.yaml)，不要复制算法源文件。
+YAML 使用 `yaml.safe_load`，只能填写显式注册名称，且 schema 当前为版本 1。
+
+### 情况二：需要新组件
+
+以新增 objective 为例：
+
+1. 在 `marl/objectives.py` 实现独立、可测试的目标函数；
+2. 在 `marl/builtins.py` 添加严格 factory，拒绝未知 options；
+3. 通过 `register_objective()` 注册稳定名称并声明动作/奖励兼容性；
+4. 在 recipe 的 `objectives` 中引用该名称；
+5. 测试公式、系数、形状、梯度和非法配置。
+
+policy、critic、return estimator、experience source、update plan 和 target update 遵循
+同样流程。带参数的组件使用 `nn.Module`；无参数组件优先使用不可变 dataclass。
+
+### 情况三：确实需要新算法
+
+新算法类必须直接继承 `BaseMARLAlgorithm`，不能继承 MAPPO/MADDPG 再覆盖大段 loss，
+也不能创建 `BasePPOAlgorithm` 之类的中间继承层。推荐顺序：
+
+1. 先实现并测试缺少的组件；
+2. 新算法类只装配 policy、critic、objectives 和算法特有前向语义；
+3. 用 `MARLModelOutput` 返回统一输出，用 `LossBundle` 组合 loss；
+4. 把 mini-batch、epoch、优化器和 target 更新顺序放入 UpdatePlan；
+5. trainer 依赖能力协议，不使用算法名称判断；
+6. 用固定小张量对照论文公式或迁移前实现；
+7. 增加一个小环境完整训练及 checkpoint 恢复测试。
+
+当前 MAPPO 是组合式参考实现；MAAC、MADDPG、MASAC、QMIX 仍保留旧
+`BaseMARLAlgorithm.optimize()` 入口，迁移时应逐个进行，不要一次重写全部算法。
+
+## 新论文接入推荐流程
+
+1. 提取论文中的状态、动作、奖励、网络、损失、数据来源和更新顺序；
+2. 写“已满足 / 可配置复用 / 缺失”对照表；
+3. 先实现环境 adapter 和固定张量数学测试；
+4. 按 recipe → component → trainer → algorithm 的顺序选择最小扩展层；
+5. 每个阶段运行定向测试和完整门禁；
+6. 最后再做长训练、性能测试和论文指标对比。
+
+不要用“训练能跑”代替公式验证，也不要把单个 seed 的结果称为复现成功。论文缺少的
+参数或数据要显式记录假设。
 
 ## 环境适配与训练
 
-环境与算法之间现在有一条固定的数据链：
+环境与算法之间使用相同的 adapter 和公共数据协议，但经验生命周期分成两条：
 
 ```text
-具体环境 -> EnvironmentAdapter -> EnvironmentStep / Transition
-          -> transitions_to_batch() / TensorReplayBuffer.sample()
-          -> MARLBatch -> algorithm.optimize()
-                |
-                +-> adapter.spec -> algorithm_config_from_env()
+具体环境 -> EnvironmentAdapter -> EnvironmentStep
+                   |
+                   +-> off-policy: Transition -> TensorReplayBuffer
+                   |               -> MARLBatch -> 旧算法 optimize()
+                   |
+                   +-> on-policy: RolloutBuffer -> GAEEstimator
+                                   -> PreparedRollout -> PPOUpdatePlan
+
+adapter.spec -> EnvironmentSpec -> compile_recipe（组合式链路）
+                             └-> algorithm_config_from_env（旧算法兼容链路）
 ```
 
 接口定义在 [`marl/envs/base.py`](marl/envs/base.py)。后续换论文环境时，新增一个
 `EnvironmentAdapter` 子类，实现 `spec`、`reset` 和 `step`，即可复用现有算法类和
-`transitions_to_batch()`。如果新环境的动作类型与某个算法不匹配，配置工厂会直接报错。
+训练设施。离策略入口可继续使用 `transitions_to_batch()` 或 `TensorReplayBuffer`；
+MAPPO 由 `OnPolicyTrainer` 直接采集 fresh rollout。如果新环境的动作类型与某个算法
+不匹配，recipe 编译器或旧配置工厂会直接报错。
 固定智能体数量、同构观测和动作是目前算法的前提；突破这些前提需要扩展模型能力。
 
 论文式 P2P 电能交易环境位于 [`marl/envs/energy_trading.py`](marl/envs/energy_trading.py)，
