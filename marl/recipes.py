@@ -146,6 +146,36 @@ def load_algorithm_recipe(path: str | Path) -> AlgorithmRecipe:
     return recipe_from_dict(cast(Mapping[str, object], data))
 
 
+def _thaw(value: ConfigValue) -> object:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
+def recipe_to_dict(recipe: AlgorithmRecipe) -> dict[str, object]:
+    def component(item: ComponentRecipe) -> dict[str, object]:
+        result: dict[str, object] = {"type": item.type}
+        if item.options:
+            result["options"] = {
+                key: _thaw(value) for key, value in item.options.items()
+            }
+        return result
+
+    return {
+        "schema_version": recipe.schema_version,
+        "algorithm": recipe.algorithm,
+        "policy": component(recipe.policy),
+        "critic": component(recipe.critic),
+        "objectives": [component(item) for item in recipe.objectives],
+        "returns": component(recipe.returns),
+        "experience": component(recipe.experience),
+        "update": component(recipe.update),
+        "target_update": component(recipe.target_update),
+    }
+
+
 def compile_recipe(
     recipe: AlgorithmRecipe,
     environment: EnvironmentSpec,
@@ -165,3 +195,9 @@ def compile_recipe(
         registration = registry.resolve(kind, component.type)
         registration.validate(component.type, environment)
     return CompiledRecipe(recipe=recipe, environment=environment)
+
+
+# 注册发生在 recipe 模块完成定义之后，避免组件工厂反向依赖配置解析。
+from marl.builtins import register_builtin_components  # noqa: E402
+
+register_builtin_components(DEFAULT_COMPONENT_REGISTRY)

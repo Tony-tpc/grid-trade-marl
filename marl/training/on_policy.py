@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Protocol, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
+import numpy as np
 import torch
 from torch import Tensor, nn
 
-from marl.core import MARLBatch
-from marl.envs.base import ActionKind, EnvironmentSpec
+from marl.core import MARLBatch, MARLModelOutput
+from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
 from marl.objectives import LossBundle
 from marl.returns import GAEEstimator
+from marl.runtime import SyncVectorEnv
+
+if TYPE_CHECKING:
+    from marl.recipes import AlgorithmRecipe
+    from marl.registry import ComponentRegistry
 
 
 class LossComputingModule(Protocol):
@@ -22,6 +29,25 @@ class LossComputingModule(Protocol):
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle: ...
+
+
+class OnPolicyActorCritic(LossComputingModule, Protocol):
+    """采样器需要的 actor-critic 能力，不绑定具体算法名称。"""
+
+    def sample(
+        self,
+        observations: Tensor,
+        state: Tensor | None = None,
+        *,
+        deterministic: bool = False,
+        action_mask: Tensor | None = None,
+    ) -> MARLModelOutput: ...
+
+    def values(self, observations: Tensor, state: Tensor | None = None) -> Tensor: ...
+
+    def state_dict(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool = True) -> Any: ...
 
 
 def _allocate(
@@ -282,3 +308,204 @@ class PPOUpdatePlan:
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         self.optimizer.load_state_dict(cast(dict[str, Any], state["optimizer"]))
         self.update_count = int(state["update_count"])
+
+
+class OnPolicyTrainer:
+    """从并行环境采集 fresh rollout，并交给通用 UpdatePlan。"""
+
+    def __init__(
+        self,
+        environment: SyncVectorEnv,
+        algorithm: OnPolicyActorCritic,
+        estimator: GAEEstimator,
+        rollout_horizon: int,
+        update_plan: PPOUpdatePlan,
+        *,
+        device: torch.device | str = "cpu",
+        recipe: AlgorithmRecipe | None = None,
+    ) -> None:
+        if rollout_horizon < 1 or rollout_horizon > environment.spec.horizon:
+            raise ValueError("rollout_horizon 必须位于 [1, environment horizon]")
+        self.environment = environment
+        self.algorithm = algorithm
+        self.estimator = estimator
+        self.rollout_horizon = rollout_horizon
+        self.update_plan = update_plan
+        self.device = torch.device(device)
+        self.recipe = recipe
+
+    @classmethod
+    def from_recipe(
+        cls,
+        environment: SyncVectorEnv,
+        algorithm: OnPolicyActorCritic,
+        recipe: AlgorithmRecipe,
+        *,
+        device: torch.device | str = "cpu",
+        registry: ComponentRegistry | None = None,
+        generator: torch.Generator | None = None,
+    ) -> OnPolicyTrainer:
+        # 延迟导入防止训练组件与 recipe/内置工厂形成循环依赖。
+        from marl.builtins import OptimizerConfig, RolloutConfig
+        from marl.recipes import compile_recipe
+        from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentKind
+
+        selected_registry = (
+            DEFAULT_COMPONENT_REGISTRY
+            if registry is None else registry
+        )
+        compile_recipe(recipe, environment.spec, registry=selected_registry)
+        estimator = cast(
+            GAEEstimator,
+            selected_registry.build(
+                ComponentKind.RETURN_ESTIMATOR,
+                recipe.returns.type,
+                recipe.returns.options,
+                environment.spec,
+            ),
+        )
+        rollout = cast(
+            RolloutConfig,
+            selected_registry.build(
+                ComponentKind.EXPERIENCE_SOURCE,
+                recipe.experience.type,
+                recipe.experience.options,
+                environment.spec,
+            ),
+        )
+        optimizer_config = cast(
+            OptimizerConfig,
+            selected_registry.build(
+                ComponentKind.UPDATE_PLAN,
+                recipe.update.type,
+                recipe.update.options,
+                environment.spec,
+            ),
+        )
+        optimizer = torch.optim.Adam(
+            algorithm.parameters(), lr=optimizer_config.learning_rate
+        )
+        update_plan = PPOUpdatePlan(
+            optimizer,
+            optimizer_config.update,
+            generator=generator,
+        )
+        return cls(
+            environment,
+            algorithm,
+            estimator,
+            rollout.horizon or environment.spec.horizon,
+            update_plan,
+            device=device,
+            recipe=recipe,
+        )
+
+    def _tensors(
+        self, steps: Sequence[EnvironmentStep]
+    ) -> tuple[Tensor, Tensor, Tensor | None]:
+        observations = torch.as_tensor(
+            np.stack([step.observations for step in steps]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        states = torch.as_tensor(
+            np.stack([step.state for step in steps]),
+            dtype=torch.float32,
+            device=self.device,
+        )
+        action_masks = None
+        if self.environment.spec.action_kind == ActionKind.DISCRETE:
+            if any(step.action_mask is None for step in steps):
+                raise ValueError("离散环境的每个 step 都必须提供 action_mask")
+            action_masks = torch.as_tensor(
+                np.stack([cast(np.ndarray, step.action_mask) for step in steps]),
+                dtype=torch.bool,
+                device=self.device,
+            )
+        return observations, states, action_masks
+
+    def collect(self, seeds: list[int]) -> PreparedRollout:
+        if len(seeds) != len(self.environment.adapters):
+            raise ValueError("seeds 数量必须与并行环境数量一致")
+        steps = self.environment.reset(seeds)
+        buffer = RolloutBuffer(
+            self.environment.spec,
+            horizon=self.rollout_horizon,
+            num_envs=len(self.environment.adapters),
+        )
+        for index in range(self.rollout_horizon):
+            observations, states, action_masks = self._tensors(steps)
+            with torch.inference_mode():
+                output = self.algorithm.sample(
+                    observations,
+                    states,
+                    action_mask=action_masks,
+                )
+            if output.log_prob is None or output.values is None:
+                raise RuntimeError("on-policy sample 必须返回 log_prob 和 values")
+            next_steps = self.environment.step(output.actions.cpu().numpy())
+            rewards = torch.as_tensor(
+                np.stack([step.rewards for step in next_steps]), dtype=torch.float32
+            )
+            terminated = torch.as_tensor(
+                np.asarray([step.terminated for step in next_steps]), dtype=torch.bool
+            ).unsqueeze(-1).expand(-1, self.environment.spec.num_agents)
+            truncated = torch.as_tensor(
+                np.asarray([step.truncated for step in next_steps]), dtype=torch.bool
+            ).unsqueeze(-1).expand(-1, self.environment.spec.num_agents)
+            buffer.add(
+                observations=observations,
+                states=states,
+                actions=output.actions,
+                rewards=rewards,
+                old_log_prob=output.log_prob,
+                old_values=output.values,
+                terminated=terminated,
+                truncated=truncated,
+                action_masks=action_masks,
+            )
+            steps = next_steps
+            if index + 1 < self.rollout_horizon and any(step.done for step in steps):
+                raise RuntimeError(
+                    "环境在 rollout_horizon 之前结束；请缩短 horizon 或支持部分 reset"
+                )
+
+        next_observations, next_states, _ = self._tensors(steps)
+        with torch.inference_mode():
+            next_value = self.algorithm.values(next_observations, next_states)
+        return buffer.finish(next_value, self.estimator)
+
+    def train_rollout(self, seeds: list[int]) -> dict[str, float]:
+        return self.update_plan.update(self.algorithm, self.collect(seeds))
+
+    def state_dict(self) -> dict[str, Any]:
+        from marl.recipes import recipe_to_dict
+
+        return {
+            "algorithm": deepcopy(dict(self.algorithm.state_dict())),
+            "update_plan": self.update_plan.state_dict(),
+            "recipe": recipe_to_dict(self.recipe) if self.recipe is not None else None,
+        }
+
+    def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        from marl.recipes import recipe_to_dict
+
+        saved_recipe = state.get("recipe")
+        current_recipe = recipe_to_dict(self.recipe) if self.recipe is not None else None
+        if saved_recipe != current_recipe:
+            raise ValueError("checkpoint recipe 与当前 trainer recipe 不一致")
+        self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
+        self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))
+
+    def save_checkpoint(self, path: str | Path) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(self.state_dict(), target)
+
+    def load_checkpoint(
+        self, path: str | Path, *, map_location: str | torch.device = "cpu"
+    ) -> None:
+        state = torch.load(path, map_location=map_location, weights_only=False)
+        if not isinstance(state, Mapping):
+            raise TypeError("trainer checkpoint 顶层必须是 mapping")
+        self.load_state_dict(cast(Mapping[str, Any], state))

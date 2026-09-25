@@ -2,6 +2,8 @@
 
 from marl.training.on_policy import (
     LossComputingModule,
+    OnPolicyActorCritic,
+    OnPolicyTrainer,
     PPOUpdatePlan,
     PreparedRollout,
     RolloutBuffer,
@@ -9,6 +11,8 @@ from marl.training.on_policy import (
 
 __all__ = [
     "LossComputingModule",
+    "OnPolicyActorCritic",
+    "OnPolicyTrainer",
     "PPOUpdatePlan",
     "PreparedRollout",
     "RolloutBuffer",
