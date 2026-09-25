@@ -1,0 +1,46 @@
+schema_version: 1
+algorithm: mappo
+
+policy:
+  type: independent_discrete
+  options:
+    hidden_dim: 64
+
+critic:
+  type: centralized_value
+  options:
+    hidden_dim: 64
+
+objectives:
+  - type: ppo_clip
+    options:
+      clip_ratio: 0.2
+  - type: value_mse
+    options:
+      coefficient: 0.5
+  - type: entropy
+    options:
+      coefficient: 0.01
+
+returns:
+  type: gae
+  options:
+    gamma: 0.99
+    lambda: 0.95
+    normalize_advantage: true
+
+experience:
+  type: rollout
+  options:
+    horizon: 48
+
+update:
+  type: ppo_update
+  options:
+    learning_rate: 0.0003
+    epochs: 2
+    mini_batch_size: 64
+    max_grad_norm: 10.0
+
+target_update:
+  type: none

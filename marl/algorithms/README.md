@@ -110,29 +110,19 @@ MADDPG、MASAC、QMIX 和 MAAC 使用目标网络；on-policy 的 MAPPO 不需�
 
 ## 7. 一次训练更新
 
-```python
-algorithm = ...
-optimizer = torch.optim.Adam(algorithm.parameters(), lr=3e-4)
+MAPPO 使用完整的 fresh on-policy 链路：`OnPolicyTrainer` 采集固定 horizon 的 rollout，
+保存 old log-prob/value，按 termination/truncation 语义计算 GAE，再由 `PPOUpdatePlan`
+随机生成 mini-batch 并执行多个 epoch。一次 rollout 更新后即失效，不能进入长期 replay。
 
-# batch 通常来自 rollout buffer 或 replay buffer。
-metrics = algorithm.optimize(batch, optimizer)
-print(metrics["loss"])
-```
-
-`optimize` 会依次清空旧梯度、调用 `compute_loss`、反向传播、梯度裁剪、参数更新和目标
-网络更新。MAPPO 的 `old_log_prob/advantages/returns` 必须由 rollout 与 GAE 过程提前放入
-`batch.extras`，三者都要保持逐智能体形状 `[B,N]`。
-在 CUDA 上可以传入 `amp_dtype=torch.bfloat16` 开启 BF16 autocast；传入
-`sync_metrics=False` 可把指标暂留在 GPU，记录日志时再调用
-`algorithm.metrics_to_cpu(metrics)`，避免每一步都同步设备。
+其他四个算法在迁移前仍使用 `algorithm.optimize(batch, optimizer)`。这只是兼容入口，
+新组件不应把 optimizer step 放回算法类。
 
 ## 8. 当前基础版本的边界
 
 这些实现用于提供清晰、可修改的算法核心。正式复现实验还需要根据论文和环境决定：
 
-- replay/rollout buffer 和采样比例；
+- replay buffer 和采样比例；
 - observation/reward normalization；
-- MAPPO 的 GAE、mini-batch 与多 epoch 更新；
 - recurrent policy 的 hidden state 和 episode mask；
 - 异质智能体是否分别使用 Actor；
 - termination 与 time-limit truncation 的区别；

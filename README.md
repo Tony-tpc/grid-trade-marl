@@ -95,8 +95,9 @@ marl/
 需按 [PyTorch 官方安装说明](https://docs.pytorch.org/get-started/locally/) 在本项目
 虚拟环境安装 CUDA 版 PyTorch。`--amp bf16` 可在支持
 BF16 的 CUDA 设备上开启混合精度；默认保持 FP32。通用执行组件位于
-`marl/runtime.py`，负责设备选择、并行适配器和经验存储；唯一的参数更新流程
-位于 `BaseMARLAlgorithm.optimize()`。环境适配器负责采集与校验数据，不负责梯度更新。
+`marl/runtime.py`，负责设备选择、并行适配器和离策略经验存储。旧的离策略算法仍可调用
+`BaseMARLAlgorithm.optimize()`；MAPPO 的采样、GAE、mini-batch 与多 epoch 更新由
+`OnPolicyTrainer` 和 `PPOUpdatePlan` 负责。环境适配器只采集与校验数据，不负责梯度更新。
 如果已有与 Python、操作系统及架构兼容的 CUDA wheel，也可以用
 `python -m pip install --no-index --no-deps --force-reinstall <wheel路径>`
 离线安装；安装后请检查 `torch.cuda.is_available()` 并运行训练测试。
@@ -108,11 +109,11 @@ BF16 的 CUDA 设备上开启混合精度；默认保持 FP32。通用执行组�
 [`marl/algorithms/README.md`](marl/algorithms/README.md)，其中解释了张量形状、CTDE、
 Actor/Critic、PyTorch 梯度、target network 和五种算法之间的区别。
 
-## 继承边界
+## 组合式算法边界
 
-`BaseBackbone` 负责表示学习；`Actor/Critic/Mixer` 负责网络角色；
-`BaseMARLAlgorithm` 负责训练生命周期，包括统一的 `act`、`compute_loss`、梯度裁剪、
-target network 更新和 checkpoint。
+`BaseBackbone` 负责表示学习；`Actor/Critic/Mixer` 负责网络角色。策略拓扑、目标函数、
+return 估计、经验来源和更新计划是平级组件，由强类型 Python recipe 或安全 YAML recipe
+组装。具体算法仍直接继承 `BaseMARLAlgorithm`，但算法类只选择并校验组件。
 
 五个算法均直接继承 `BaseMARLAlgorithm`，并且是可实例化的具体实现：
 
@@ -122,16 +123,47 @@ target network 更新和 checkpoint。
 - `MASAC`：独立 tanh-Gaussian Actor、逐智能体 twin-Q 与温度。
 - `QMIX`：仅用于共享团队奖励的合作任务，不适用于个体收益博弈。
 
-若要做论文变体，可以继承这些具体类并只改目标函数或网络组合。例如：
+MAPPO 已迁移到完整的组合式 on-policy 链路。使用 YAML 配置运行合成环境示例：
 
-```python
-class MyMAPPO(MAPPO):
-    def compute_loss(self, batch):
-        losses = super().compute_loss(batch)
-        # 在此替换或扩展 clipped objective / value / entropy loss。
-        return losses
+```powershell
+.\.venv\Scripts\python.exe examples\train_mappo_recipe.py --rounds 2
 ```
 
-`marl/models`、`marl/modules` 和五个算法均有单元测试。这里实现的是清晰的基础版本；
-复现实验时仍应根据论文版本和环境的 termination/truncation 语义调整 rollout、replay、
-GAE、n-step return、参数共享方式及优化器调度。
+同一链路也可以完全由 Python recipe 构造，环境尺寸仍只从 `env.spec` 注入：
+
+```python
+from marl.algorithms import MAPPO, MAPPOConfig, default_mappo_recipe
+from marl.training import OnPolicyTrainer
+
+recipe = default_mappo_recipe(MAPPOConfig(hidden_dim=64))
+algorithm = MAPPO.from_recipe(env.spec, recipe)
+trainer = OnPolicyTrainer.from_recipe(env, algorithm, recipe)
+metrics = trainer.train_rollout(seeds=[42])
+```
+
+新机制通过显式注册表扩展，注册动作发生在加载或编译使用该名称的 recipe 之前：
+
+```python
+from marl.envs import ActionKind
+from marl.objectives import EntropyObjective
+from marl.registry import register_objective
+
+
+def build_small_entropy(options, spec):
+    coefficient = float(options.get("coefficient", 0.005))
+    return EntropyObjective(coefficient=coefficient)
+
+
+register_objective(
+    "small_entropy",
+    build_small_entropy,
+    action_kinds=frozenset({ActionKind.DISCRETE}),
+)
+```
+
+Python 中也可以使用 `default_mappo_recipe()`，或者通过 `register_policy()`、
+`register_objective()` 等显式注册接口添加通用组件。只重新组合现有机制时应新增 recipe；
+只有出现新的数学机制时才新增组件，不复制完整算法类。YAML 不能填写 Python 导入路径，
+环境尺寸始终由 `EnvironmentSpec` 注入。
+
+MAAC、MADDPG、MASAC、QMIX 暂时保留原更新入口，后续将按相同组件协议逐个迁移。
