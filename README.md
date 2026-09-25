@@ -60,7 +60,8 @@ marl/
 
 ```text
 具体环境 -> EnvironmentAdapter -> EnvironmentStep / Transition
-          -> transitions_to_batch() -> MARLBatch -> algorithm.optimize()
+          -> transitions_to_batch() / TensorReplayBuffer.sample()
+          -> MARLBatch -> algorithm.optimize()
                 |
                 +-> adapter.spec -> algorithm_config_from_env()
 ```
@@ -86,10 +87,20 @@ marl/
 运行一个真实的环境交互与参数更新示例：
 
 ```powershell
-.\.venv\Scripts\python.exe examples\train_energy_maac.py --episodes 5 --agents 3
+.\.venv\Scripts\python.exe examples\train_energy_maac.py --episodes 5 --agents 3 --num-envs 16 --device auto
 ```
 
-示例使用合成曲线、ε-greedy 探索和简单 replay buffer，并分别打印各家庭回报。
+示例使用合成曲线、ε-greedy 探索、批量环境推理和预分配 Tensor replay buffer，
+并打印各家庭平均回报。设备由 `--device auto|cpu|cuda` 选择；使用 NVIDIA GPU 前，
+需按 [PyTorch 官方安装说明](https://docs.pytorch.org/get-started/locally/) 在本项目
+虚拟环境安装 CUDA 版 PyTorch。`--amp bf16` 可在支持
+BF16 的 CUDA 设备上开启混合精度；默认保持 FP32。通用执行组件位于
+`marl/runtime.py`，负责设备选择、并行适配器和经验存储；唯一的参数更新流程
+位于 `BaseMARLAlgorithm.optimize()`。环境适配器负责采集与校验数据，不负责梯度更新。
+如果已有与 Python、操作系统及架构兼容的 CUDA wheel，也可以用
+`python -m pip install --no-index --no-deps --force-reinstall <wheel路径>`
+离线安装；安装后请检查 `torch.cuda.is_available()` 并运行训练测试。
+小网络、短实验可能受环境步进和 CPU/GPU 往返限制，是否加速应比较实际吞吐。
 请先关注输出的 episode 步数、个体奖励和 loss 是否正常，再接入论文数据。环境设计
 细节与更换论文环境的示例见 [`marl/envs/README.md`](marl/envs/README.md)。
 

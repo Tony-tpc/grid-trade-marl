@@ -5,7 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 import torch
 from torch import Tensor, nn
@@ -81,17 +81,57 @@ class BaseMARLAlgorithm(nn.Module, ABC):
 
         """
 
-    def optimize(self, batch: MARLBatch, optimizer: torch.optim.Optimizer) -> dict[str, float]:
+    @overload
+    def optimize(
+        self,
+        batch: MARLBatch,
+        optimizer: torch.optim.Optimizer,
+        *,
+        amp_dtype: torch.dtype | None = None,
+        sync_metrics: Literal[True] = True,
+    ) -> dict[str, float]: ...
+
+    @overload
+    def optimize(
+        self,
+        batch: MARLBatch,
+        optimizer: torch.optim.Optimizer,
+        *,
+        amp_dtype: torch.dtype | None = None,
+        sync_metrics: Literal[False],
+    ) -> dict[str, Tensor]: ...
+
+    def optimize(
+        self,
+        batch: MARLBatch,
+        optimizer: torch.optim.Optimizer,
+        *,
+        amp_dtype: torch.dtype | None = None,
+        sync_metrics: bool = True,
+    ) -> dict[str, float] | dict[str, Tensor]:
         """执行一次标准 PyTorch 训练步骤。
         用来进行整体梯度更新（包括 Actor 和 Critic 的参数更新）。
-        顺序非常重要：计算 loss -> 清除旧梯度 -> 反向传播 -> 裁剪梯度 -> 更新参数。
+        顺序为清除旧梯度 -> 计算 loss -> 反向传播 -> 裁剪梯度 -> 更新参数。
         PyTorch 默认会累加梯度，所以每一步都必须先 ``zero_grad``。
+        ``sync_metrics=False`` 留在设备上的标量，避免每步都同步 CUDA。
         """
-        losses = self.compute_loss(batch)
+        if amp_dtype is not None and amp_dtype != torch.bfloat16:
+            raise ValueError("目前仅支持 BF16 autocast")
+        device = batch.observations.device
+        if amp_dtype is not None and (
+            device.type != "cuda" or not torch.cuda.is_bf16_supported()
+        ):
+            raise ValueError("BF16 AMP 需要支持 BF16 的 CUDA 设备")
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(
+            device_type=device.type,
+            dtype=torch.bfloat16,
+            enabled=amp_dtype is not None,
+        ):
+            losses = self.compute_loss(batch)
         if "loss" not in losses:
             raise KeyError("compute_loss 必须返回总损失键 'loss'")
         # set_to_none=True 比把每个梯度张量清零更省内存；下一次 backward 会重新创建它。
-        optimizer.zero_grad(set_to_none=True)
         # backward() 沿计算图应用链式法则，把梯度写入每个 Parameter 的 .grad（求导）。
         losses["loss"].backward()
         if self.config.grad_clip_norm is not None:
@@ -101,7 +141,15 @@ class BaseMARLAlgorithm(nn.Module, ABC):
         optimizer.step()
         self.update_targets()  # 更新目标网络，确保训练稳定性（DQN）。
         # 输出每个 loss 的数值，便于日志记录或 TensorBoard 可视化。
-        return {name: float(value.detach()) for name, value in losses.items()}
+        detached = {name: value.detach() for name, value in losses.items()}
+        return self.metrics_to_cpu(detached) if sync_metrics else detached
+
+    @staticmethod
+    def metrics_to_cpu(metrics: dict[str, Tensor]) -> dict[str, float]:
+        """只在需要日志输出时，将所有标量一次性转移至 CPU。"""
+        names = tuple(metrics)
+        values = torch.stack([metrics[name].reshape(()) for name in names])
+        return dict(zip(names, values.cpu().tolist(), strict=True))
 
     def update_targets(self) -> None:
         """无 target network 的算法无需操作；off-policy 子类覆写该 hook。"""

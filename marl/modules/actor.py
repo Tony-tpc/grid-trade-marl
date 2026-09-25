@@ -3,7 +3,7 @@ from __future__ import annotations
 from torch import Tensor, nn
 
 from marl.models.base import BaseBackbone
-from marl.modules.action_head import ActionHeadOutput, BaseActionHead
+from marl.modules.action_head import ActionHeadOutput, BaseActionHead, DiscreteActionHead
 
 
 class Actor(nn.Module):
@@ -42,3 +42,19 @@ class Actor(nn.Module):
         if encoded.hidden_state is not None:
             result.distribution_params["hidden_state"] = encoded.hidden_state
         return result
+
+    def discrete_logits(
+        self,
+        observations: Tensor,
+        *,
+        action_mask: Tensor | None = None,
+        hidden_state: Tensor | None = None,
+        **backbone_kwargs: Tensor,
+    ) -> Tensor:
+        """只计算离散策略参数，不采样动作或构造分布。"""
+        if not isinstance(self.action_head, DiscreteActionHead):
+            raise TypeError("discrete_logits 需要 DiscreteActionHead")
+        encoded = self.backbone.forward(
+            observations, hidden_state=hidden_state, **backbone_kwargs
+        )
+        return self.action_head.logits(encoded.features, action_mask)

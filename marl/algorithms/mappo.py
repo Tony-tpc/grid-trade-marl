@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor, nn
@@ -60,10 +61,10 @@ class MAPPO(BaseMARLAlgorithm):
         """堆叠独立 Actor 的离散分布参数，得到 [B,N,A]。"""
         return torch.stack(
             [
-                actor.forward(
+                cast(Actor, actor).discrete_logits(
                     observations[..., i, :],
                     action_mask=(action_mask[..., i, :] if action_mask is not None else None),
-                ).distribution_params["logits"]
+                )
                 for i, actor in enumerate(self.actors)
             ],
             dim=-2,
@@ -78,7 +79,11 @@ class MAPPO(BaseMARLAlgorithm):
         **kwargs: Tensor,
     ) -> Tensor:
         logits = self._policy_logits(observations, action_mask)
-        return logits.argmax(dim=-1) if deterministic else Categorical(logits=logits).sample()
+        return (
+            logits.argmax(dim=-1)
+            if deterministic
+            else Categorical(logits=logits, validate_args=False).sample()
+        )
 
     def compute_loss(self, batch: MARLBatch) -> dict[str, Tensor]:
         if batch.actions is None:
@@ -93,7 +98,8 @@ class MAPPO(BaseMARLAlgorithm):
 
         # 每个智能体分别计算自己的概率比与 advantage，再对训练样本求平均。
         distribution = Categorical(
-            logits=self._policy_logits(batch.observations, batch.action_mask)
+            logits=self._policy_logits(batch.observations, batch.action_mask),
+            validate_args=False,
         )
         new_log_prob = distribution.log_prob(batch.actions.long())
         ratio = (new_log_prob - batch.extras["old_log_prob"]).exp()

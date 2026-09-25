@@ -64,17 +64,20 @@ class MADDPG(BaseMARLAlgorithm):
 
     @staticmethod
     def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:
-        """[Batchsize,N_agents,Observation_one_agent] 与 [B,N,A] 拼成 [B,N*(O+A)]，供每个集中式 Critic 使用。"""
-        return torch.cat((observations.flatten(-2), # 将每个智能体的观察和动作展平到最后一维 [batch, num_agents*observation]
-                          actions.flatten(-2)),     # 将每个智能体的观察和动作展平到最后一维 [batch, num_agents*action]
-                          dim=-1                    # 将观察和动作拼接成 [batch, num_agents*(observation+action)]
-                          )
+        """把联合观测和动作展平后拼成 ``[B, N * (O + A)]``。"""
+        return torch.cat(
+            (
+                observations.flatten(-2),
+                actions.flatten(-2),
+            ),
+            dim=-1,
+        )
 
     @staticmethod
     def _joint_actions(actors: nn.ModuleList, observations: Tensor) -> Tensor:
         return torch.stack(
             [
-                # 把第i个Agent的observation提取成[batch,observe]，送入第i个Actor得到动作[batch,action]
+                # 第 i 个 Actor 只读取第 i 个 Agent 的局部观测。
                 actor.forward(observations[..., i, :], deterministic=True).actions
                 for i, actor in enumerate(actors)
             ],
@@ -122,14 +125,14 @@ class MADDPG(BaseMARLAlgorithm):
         # ------------------- Actor Loss ------------------------
         # 更新 Actor_i 时，只让自己的动作 a_i 保持梯度。其他 Actor 的动作固定，
         # 因为当前优化的是 J_i，而不是把别人的收益也算进同一个目标。
-        policy_actions = self._joint_actions(self.actors, batch.observations) # [Batch, num_agents, action_dim]
+        policy_actions = self._joint_actions(self.actors, batch.observations)
         # 存储每一个 Agent 的 actor loss
         actor_terms = []
         for i, critic in enumerate(self.critics):
             # joint_actions = [detach(a_(j不等于i),...,a_(i=j),...]
             joint_actions = torch.stack(
                 [
-                    # 如果现在遍历到的 action 属于当前正在优化的 Agent (i)，就正常使用；否则把它 detach。
+                    # 当前 Agent 的动作保留梯度，其他 Agent 的动作视作常量。
                     policy_actions[..., j, :] if j == i else policy_actions[..., j, :].detach()
                     for j in range(self.cfg.num_agents)
                 ],

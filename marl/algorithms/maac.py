@@ -49,6 +49,11 @@ class AttentionCritic(nn.Module):
         self.attention = nn.MultiheadAttention(
             config.hidden_dim, config.attention_heads, batch_first=True
         )
+        self.register_buffer(
+            "_self_attention_mask",
+            torch.eye(config.num_agents, dtype=torch.bool),
+            persistent=False,
+        )
         self.q_head = nn.Sequential(
             nn.Linear(2 * config.hidden_dim, config.hidden_dim),
             nn.ReLU(),
@@ -67,9 +72,12 @@ class AttentionCritic(nn.Module):
             context = torch.zeros_like(own)
         else:
             # 对角线 True 表示 i 不能把自己的 replay 动作 a_i 当作“别人信息”读取。
-            exclude_self = torch.eye(agents, device=observations.device, dtype=torch.bool)
             context, _ = self.attention(
-                own, others, others, attn_mask=exclude_self, need_weights=False
+                own,
+                others,
+                others,
+                attn_mask=self._self_attention_mask,
+                need_weights=False,
             )
         q_values = self.q_head(torch.cat((own, context), dim=-1))
         return cast(Tensor, q_values.reshape(*leading, agents, self.action_dim))
@@ -100,24 +108,37 @@ class MAAC(BaseMARLAlgorithm):
         return self.config  # type: ignore[return-value]
 
     @staticmethod
+    def _joint_logits(
+        actors: nn.ModuleList,
+        observations: Tensor,
+        action_mask: Tensor | None = None,
+    ) -> Tensor:
+        return torch.stack(
+            [
+                cast(Actor, actor).discrete_logits(
+                    observations[..., i, :],
+                    action_mask=(action_mask[..., i, :] if action_mask is not None else None),
+                )
+                for i, actor in enumerate(actors)
+            ],
+            dim=-2,
+        )
+
+    @classmethod
     def _joint_policy(
+        cls,
         actors: nn.ModuleList,
         observations: Tensor,
         action_mask: Tensor | None = None,
         deterministic: bool = False,
     ) -> tuple[Tensor, Tensor, Tensor]:
-        outputs = [
-            actor.forward(
-                observations[..., i, :],
-                deterministic=deterministic,
-                action_mask=(action_mask[..., i, :] if action_mask is not None else None),
-            )
-            for i, actor in enumerate(actors)
-        ]
+        logits = cls._joint_logits(actors, observations, action_mask)
+        distribution = Categorical(logits=logits, validate_args=False)
+        actions = logits.argmax(dim=-1) if deterministic else distribution.sample()
         return (
-            torch.stack([output.actions for output in outputs], dim=-1),
-            torch.stack([output.log_prob for output in outputs], dim=-1),
-            torch.stack([output.distribution_params["logits"] for output in outputs], dim=-2),
+            actions,
+            distribution.log_prob(actions),
+            logits,
         )
 
     def act(
@@ -151,9 +172,9 @@ class MAAC(BaseMARLAlgorithm):
         critic_loss = F.mse_loss(chosen_q, target_q)
 
         # 反事实 baseline：固定其他智能体动作，按 pi_i 对候选 a_i 求期望。
-        _, _, logits = self._joint_policy(self.actors, batch.observations, batch.action_mask)
-        distribution = Categorical(logits=logits)
-        policy_q = self.critic(batch.observations, batch.actions).detach()
+        logits = self._joint_logits(self.actors, batch.observations, batch.action_mask)
+        distribution = Categorical(logits=logits, validate_args=False)
+        policy_q = q_all.detach()
         probabilities = distribution.probs.detach()
         baseline = (probabilities * policy_q).sum(dim=-1, keepdim=True)
         advantage = (policy_q - baseline).detach()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import cast
+from typing import Literal, cast, overload
 
 from marl.algorithms import (
     MAACConfig,
@@ -14,6 +14,42 @@ from marl.algorithms import (
 )
 from marl.algorithms.base import AlgorithmConfig
 from marl.envs.base import ActionKind, EnvironmentSpec, RewardStructure
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: Literal["maac"], spec: EnvironmentSpec, **overrides: object
+) -> MAACConfig: ...
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: Literal["maddpg"], spec: EnvironmentSpec, **overrides: object
+) -> MADDPGConfig: ...
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: Literal["mappo"], spec: EnvironmentSpec, **overrides: object
+) -> MAPPOConfig: ...
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: Literal["masac"], spec: EnvironmentSpec, **overrides: object
+) -> MASACConfig: ...
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: Literal["qmix"], spec: EnvironmentSpec, **overrides: object
+) -> QMIXConfig: ...
+
+
+@overload
+def algorithm_config_from_env(
+    algorithm: str, spec: EnvironmentSpec, **overrides: object
+) -> AlgorithmConfig: ...
 
 
 def algorithm_config_from_env(

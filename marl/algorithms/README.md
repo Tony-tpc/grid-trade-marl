@@ -119,9 +119,12 @@ metrics = algorithm.optimize(batch, optimizer)
 print(metrics["loss"])
 ```
 
-`optimize` 会依次调用 `compute_loss`、清空旧梯度、反向传播、梯度裁剪、参数更新和目标
+`optimize` 会依次清空旧梯度、调用 `compute_loss`、反向传播、梯度裁剪、参数更新和目标
 网络更新。MAPPO 的 `old_log_prob/advantages/returns` 必须由 rollout 与 GAE 过程提前放入
 `batch.extras`，三者都要保持逐智能体形状 `[B,N]`。
+在 CUDA 上可以传入 `amp_dtype=torch.bfloat16` 开启 BF16 autocast；传入
+`sync_metrics=False` 可把指标暂留在 GPU，记录日志时再调用
+`algorithm.metrics_to_cpu(metrics)`，避免每一步都同步设备。
 
 ## 8. 当前基础版本的边界
 

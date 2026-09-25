@@ -42,6 +42,10 @@ def test_actor_and_mask() -> None:
     result = actor(observations, deterministic=True, action_mask=mask)
     assert result.actions.shape == (8, 3)
     assert torch.equal(result.actions, torch.zeros_like(result.actions))
+    assert torch.equal(
+        actor.discrete_logits(observations, action_mask=mask),
+        result.distribution_params["logits"],
+    )
 
 
 def test_mixers() -> None:

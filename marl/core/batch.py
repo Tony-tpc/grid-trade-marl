@@ -52,14 +52,14 @@ class MARLBatch:
         ):
             raise ValueError("action_mask 的前置维度必须与 observations 一致")
 
-    def to(self, device: torch.device | str) -> MARLBatch:
+    def to(self, device: torch.device | str, *, non_blocking: bool = False) -> MARLBatch:
         """返回移动到目标设备的新批次，不在原对象上做隐式修改。"""
 
         def move(value: Tensor | None) -> Tensor | None:
-            return value.to(device) if value is not None else None
+            return value.to(device, non_blocking=non_blocking) if value is not None else None
 
         return MARLBatch(
-            observations=self.observations.to(device),
+            observations=self.observations.to(device, non_blocking=non_blocking),
             actions=move(self.actions),
             rewards=move(self.rewards),
             next_observations=move(self.next_observations),
@@ -68,5 +68,8 @@ class MARLBatch:
             next_state=move(self.next_state),
             action_mask=move(self.action_mask),
             next_action_mask=move(self.next_action_mask),
-            extras={key: tensor.to(device) for key, tensor in self.extras.items()},
+            extras={
+                key: tensor.to(device, non_blocking=non_blocking)
+                for key, tensor in self.extras.items()
+            },
         )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor, nn
@@ -33,17 +34,23 @@ class DiscreteActionHead(BaseActionHead):
         super().__init__()
         self.logits_layer = nn.Linear(feature_dim, action_dim)
 
-    def forward(
-        self, features: Tensor, deterministic: bool = False, action_mask: Tensor | None = None
-    ) -> ActionHeadOutput:
+    def logits(self, features: Tensor, action_mask: Tensor | None = None) -> Tensor:
+        """返回分类分布参数，供只需要 logits 的训练路径使用。
+
+        调用方须确保每行 action_mask 至少有一个合法动作。
+        """
         logits = self.logits_layer(features)
         if action_mask is not None:
             if action_mask.shape != logits.shape:
                 raise ValueError("action_mask 与 logits 的形状必须一致")
-            if not action_mask.any(dim=-1).all():
-                raise ValueError("每个智能体至少需要一个合法动作")
             logits = logits.masked_fill(~action_mask.bool(), torch.finfo(logits.dtype).min)
-        distribution = Categorical(logits=logits)
+        return cast(Tensor, logits)
+
+    def forward(
+        self, features: Tensor, deterministic: bool = False, action_mask: Tensor | None = None
+    ) -> ActionHeadOutput:
+        logits = self.logits(features, action_mask)
+        distribution = Categorical(logits=logits, validate_args=False)
         actions = logits.argmax(dim=-1) if deterministic else distribution.sample()
         return ActionHeadOutput(
             actions, distribution.log_prob(actions), distribution.entropy(), {"logits": logits}
@@ -92,7 +99,7 @@ class GaussianActionHead(BaseActionHead):
             raise ValueError("连续动作头不使用 action_mask")
         mean = self.mean_layer(features)
         log_std = self.log_std.clamp(self.min_log_std, self.max_log_std).expand_as(mean)
-        distribution = Normal(mean, log_std.exp())
+        distribution = Normal(mean, log_std.exp(), validate_args=False)
         raw_action = mean if deterministic else distribution.rsample()
         actions = torch.tanh(raw_action)
         # tanh 变量变换的 Jacobian 修正，保证 SAC 等算法的 log_prob 正确。
