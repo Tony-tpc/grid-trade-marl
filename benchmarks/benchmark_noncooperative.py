@@ -11,6 +11,7 @@ import csv
 import hashlib
 import json
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from importlib.metadata import version
@@ -35,7 +36,6 @@ from marl.config import AlgorithmConfig, config_to_dict
 from marl.envs import (
     ActionKind,
     MPE2SimpleAdversaryConfig,
-    Transition,
     build_mpe2_simple_adversary,
 )
 from marl.experiment import build_experiment
@@ -51,7 +51,7 @@ from marl.modules.policy import (
     IndependentGaussianConfig,
 )
 from marl.runtime import SyncVectorEnv, resolve_device
-from marl.training import OffPolicyTrainer, OnPolicyTrainer
+from marl.training import OffPolicyCollector, OffPolicyTrainer, OnPolicyTrainer
 from marl.training.off_policy import ReplayConfig
 from marl.training.on_policy import PPOUpdateConfig
 
@@ -211,6 +211,21 @@ def _policy_actions(
             action_mask=mask_tensor,
         )
     return actions.squeeze(0).cpu().numpy()
+
+
+def _gaussian_exploration(
+    rng: np.random.Generator, standard_deviation: float
+) -> Callable[[np.ndarray], np.ndarray]:
+    """绑定本轮 MADDPG 探索尺度，避免循环闭包引用后续值。"""
+
+    def transform(actions: np.ndarray) -> np.ndarray:
+        return np.clip(
+            actions + rng.normal(0.0, standard_deviation, size=actions.shape),
+            -1.0,
+            1.0,
+        ).astype(np.float32)
+
+    return transform
 
 
 def _evaluate(
@@ -549,17 +564,23 @@ def _train_off_policy(
         if name == "maac"
         else ActionKind.CONTINUOUS
     )
-    adapter = build_mpe2_simple_adversary(
-        MPE2SimpleAdversaryConfig(horizon=settings.horizon),
-        action_kind=action_kind,
-    )
+    adapters = [
+        build_mpe2_simple_adversary(
+            MPE2SimpleAdversaryConfig(horizon=settings.horizon),
+            action_kind=action_kind,
+        )
+        for _ in range(settings.num_envs)
+    ]
+    vector = SyncVectorEnv(adapters)
     rng = np.random.default_rng(seed)
     try:
         config = _algorithm_config(name, settings)
-        experiment = build_experiment(adapter.spec, config, device=device, seed=seed)
+        experiment = build_experiment(vector.spec, config, device=device, seed=seed)
         trainer = experiment.trainer
         if not isinstance(trainer, OffPolicyTrainer):
             raise TypeError(f"{name} 应使用 OffPolicyTrainer")
+        trainer.optimization.sync_metrics = False
+        collector = OffPolicyCollector(vector, experiment.algorithm, device=device)
         metrics: list[dict[str, float]] = []
         evaluation_history: list[dict[str, Any]] = []
         metric_start = 0
@@ -582,44 +603,46 @@ def _train_off_policy(
         iterations = _training_iterations(settings)
         next_evaluation_step = settings.eval_interval_steps
         for episode in range(iterations):
-            for environment_index in range(settings.num_envs):
-                episode_seed = seed + episode * settings.num_envs + environment_index
-                step = adapter.reset(seed=episode_seed)
-                while not step.done:
-                    actions = _policy_actions(
-                        experiment.algorithm,
-                        step.observations,
-                        step.action_mask,
-                        device=device,
-                        deterministic=False,
-                    )
-                    if name == "maddpg":
-                        exploration = 0.3 * max(
-                            0.1,
-                            1.0 - episode / max(settings.train_episodes - 1, 1),
-                        )
-                        actions = np.clip(
-                            actions + rng.normal(0.0, exploration, size=actions.shape),
-                            -1.0,
-                            1.0,
-                        ).astype(np.float32)
-                    following = adapter.step(actions)
-                    trainer.record(Transition(step, actions, following))
-                    if trainer.ready:
-                        metrics.append(
-                            _augment_metrics(
-                                trainer.update(),
-                                config,
-                                adapter.spec.action_dim,
-                            )
-                        )
-                    environment_steps += 1
-                    step = following
+            seeds = [
+                seed + episode * settings.num_envs + environment_index
+                for environment_index in range(settings.num_envs)
+            ]
+            action_transform = None
+            if name == "maddpg":
+                exploration = 0.3 * max(
+                    0.1,
+                    1.0 - episode / max(iterations - 1, 1),
+                )
+
+                action_transform = _gaussian_exploration(rng, exploration)
+            for transitions in collector.rollout(
+                seeds,
+                action_transform=action_transform,
+            ):
+                size_before = len(trainer.replay)
+                trainer.record_many(transitions)
+                ready_updates = sum(
+                    min(trainer.replay_config.capacity, size_before + offset)
+                    >= trainer.replay_config.batch_size
+                    for offset in range(1, len(transitions) + 1)
+                )
+                for _ in range(ready_updates):
+                    trainer.update()
+                environment_steps += len(transitions)
             completed_episode = episode + 1
             if (
                 environment_steps >= next_evaluation_step
                 or completed_episode == iterations
             ):
+                interval_metrics = trainer.optimization.flush_metrics()
+                if interval_metrics:
+                    metrics.append(
+                        _augment_metrics(
+                            interval_metrics,
+                            config,
+                            vector.spec.action_dim,
+                        )
+                    )
                 evaluation_history.append(
                     _evaluation_checkpoint(
                         experiment.algorithm,
@@ -663,7 +686,8 @@ def _train_off_policy(
         )
         return result, experiment.algorithm
     finally:
-        adapter.close()
+        for adapter in adapters:
+            adapter.close()
 
 
 def _train_mappo(
@@ -686,6 +710,7 @@ def _train_mappo(
         trainer = experiment.trainer
         if not isinstance(trainer, OnPolicyTrainer):
             raise TypeError("MAPPO 应使用 OnPolicyTrainer")
+        trainer.optimization.sync_metrics = False
         metrics = []
         evaluation_history: list[dict[str, Any]] = []
         metric_start = 0
@@ -712,19 +737,22 @@ def _train_mappo(
                 seed + episode * settings.num_envs + index
                 for index in range(settings.num_envs)
             ]
-            metrics.append(
-                _augment_metrics(
-                    trainer.train_rollout(seeds),
-                    config,
-                    vector.spec.action_dim,
-                )
-            )
+            trainer.train_rollout(seeds)
             environment_steps += settings.num_envs * settings.horizon
             completed_episode = episode + 1
             if (
                 environment_steps >= next_evaluation_step
                 or completed_episode == iterations
             ):
+                interval_metrics = trainer.optimization.flush_metrics()
+                if interval_metrics:
+                    metrics.append(
+                        _augment_metrics(
+                            interval_metrics,
+                            config,
+                            vector.spec.action_dim,
+                        )
+                    )
                 evaluation_history.append(
                     _evaluation_checkpoint(
                         experiment.algorithm,

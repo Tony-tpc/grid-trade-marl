@@ -3,6 +3,7 @@
 from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     OffPolicyAlgorithm,
+    OffPolicyCollector,
     OffPolicyTrainer,
     OffPolicyUpdateConfig,
     ReplayConfig,
@@ -19,6 +20,7 @@ from marl.training.optimization import OptimizerRuntime
 __all__ = [
     "ActorCriticUpdateConfig",
     "OffPolicyAlgorithm",
+    "OffPolicyCollector",
     "OffPolicyTrainer",
     "OffPolicyUpdateConfig",
     "OptimizerRuntime",

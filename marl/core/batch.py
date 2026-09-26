@@ -100,3 +100,23 @@ class MARLBatch:
                 for key, tensor in self.extras.items()
             },
         )
+
+    def pin_memory(self) -> MARLBatch:
+        """返回 pinned-CPU 批次，供 CUDA non-blocking 整批传输。"""
+
+        def pin(value: Tensor | None) -> Tensor | None:
+            return value.pin_memory() if value is not None else None
+
+        return MARLBatch(
+            observations=self.observations.pin_memory(),
+            actions=pin(self.actions),
+            rewards=pin(self.rewards),
+            next_observations=pin(self.next_observations),
+            terminated=pin(self.terminated),
+            truncated=pin(self.truncated),
+            state=pin(self.state),
+            next_state=pin(self.next_state),
+            action_mask=pin(self.action_mask),
+            next_action_mask=pin(self.next_action_mask),
+            extras={key: tensor.pin_memory() for key, tensor in self.extras.items()},
+        )

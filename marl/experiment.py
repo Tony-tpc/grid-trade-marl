@@ -105,7 +105,7 @@ def build_experiment(
                     "actor": config.update.resolved_actor_max_grad_norm,
                     "critic": config.update.resolved_critic_max_grad_norm,
                 },
-                generator=torch.Generator().manual_seed(seed),
+                generator=torch.Generator(device=torch.device(device)).manual_seed(seed),
             ),
             device=device,
             config_data=snapshot,
@@ -204,7 +204,11 @@ def _off_policy(
     trainer = OffPolicyTrainer(
         spec,
         algorithm,
-        TensorReplayBuffer(spec, config.replay.capacity),
+        TensorReplayBuffer(
+            spec,
+            config.replay.capacity,
+            pin_memory=torch.device(device).type == "cuda",
+        ),
         config.replay,
         optimization,
         device=device,

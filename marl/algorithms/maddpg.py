@@ -34,7 +34,7 @@ from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     ReplayConfig,
 )
-from marl.training.optimization import OptimizerRuntime, metrics_to_float
+from marl.training.optimization import OptimizerRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +175,7 @@ class MADDPG(BaseMARLAlgorithm):
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
+            parameters=runtime.parameters("critic"),
         )
         runtime.record_optimizer_step()
         with runtime.autocast(device):
@@ -183,6 +184,7 @@ class MADDPG(BaseMARLAlgorithm):
             runtime.optimizer("actor"),
             actor,
             runtime.max_grad_norm("actor"),
+            parameters=runtime.parameters("actor"),
         )
         runtime.record_optimizer_step()
         runtime.finish(self.target_pairs())
@@ -191,7 +193,7 @@ class MADDPG(BaseMARLAlgorithm):
         metrics["critic_gradient_norm"] = critic_norm
         metrics["actor_gradient_norm"] = actor_norm
         metrics["gradient_norm"] = torch.maximum(critic_norm, actor_norm)
-        return metrics_to_float(metrics)
+        return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (

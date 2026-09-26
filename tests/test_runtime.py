@@ -2,6 +2,7 @@ from dataclasses import replace
 
 import numpy as np
 import torch
+from test_composable_mappo import TinyAdapter
 
 from marl.algorithms import MAACConfig
 from marl.algorithms.maac import MAACUpdateConfig
@@ -19,8 +20,8 @@ from marl.envs import (
 from marl.experiment import build_experiment
 from marl.modules.critic import AttentionQConfig
 from marl.modules.policy import IndependentDiscreteConfig
-from marl.runtime import TensorReplayBuffer
-from marl.training.off_policy import ReplayConfig
+from marl.runtime import SyncVectorEnv, TensorReplayBuffer
+from marl.training.off_policy import OffPolicyCollector, ReplayConfig
 
 
 def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
@@ -60,6 +61,77 @@ def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
         assert torch.equal(getattr(sample, name), getattr(expected, name))
 
 
+def test_record_many_matches_sequential_add_across_wraparound() -> None:
+    adapter = EnergyTradingAdapter(
+        EnergyTradingEnv(EnergyTradingConfig(num_agents=2)), ActionKind.DISCRETE
+    )
+    current = adapter.reset(seed=13)
+    transitions = []
+    for _ in range(7):
+        assert current.action_mask is not None
+        actions = current.action_mask.argmax(axis=-1).astype(np.int64)
+        following = adapter.step(actions)
+        transitions.append(Transition(current, actions, following))
+        current = following
+
+    sequential = TensorReplayBuffer(adapter.spec, capacity=3)
+    batched = TensorReplayBuffer(adapter.spec, capacity=3)
+    for transition in transitions:
+        sequential.add(transition)
+    batched.record_many(transitions)
+
+    sequential_state = sequential.state_dict()
+    batched_state = batched.state_dict()
+    assert sequential.position == batched.position
+    assert len(sequential) == len(batched)
+    for name in (
+        "observations",
+        "next_observations",
+        "states",
+        "next_states",
+        "actions",
+        "rewards",
+        "terminated",
+        "truncated",
+        "action_masks",
+        "next_action_masks",
+    ):
+        sequential_value = sequential_state[name]
+        batched_value = batched_state[name]
+        assert isinstance(sequential_value, torch.Tensor)
+        assert isinstance(batched_value, torch.Tensor)
+        assert torch.equal(sequential_value, batched_value)
+
+
+class _CountingPolicy:
+    def __init__(self, spec: EnvironmentSpec) -> None:
+        self.spec = spec
+        self.calls = 0
+
+    def act(
+        self,
+        observations: torch.Tensor,
+        *,
+        deterministic: bool = False,
+        action_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        del deterministic, action_mask
+        self.calls += 1
+        return torch.zeros(observations.shape[:-1], dtype=torch.long)
+
+
+def test_off_policy_collector_uses_one_actor_call_per_vector_step() -> None:
+    environment = SyncVectorEnv([TinyAdapter(), TinyAdapter()])
+    algorithm = _CountingPolicy(environment.spec)
+    collector = OffPolicyCollector(environment, algorithm)
+
+    batches = list(collector.rollout([3, 5]))
+
+    assert len(batches) == environment.spec.horizon
+    assert algorithm.calls == environment.spec.horizon
+    assert all(len(transitions) == 2 for transitions in batches)
+
+
 def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
     spec = EnvironmentSpec(
         2,
@@ -96,3 +168,18 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
     after = parameter.detach()
     assert not torch.equal(before, after)
     assert np.isfinite(metrics["loss"])
+    cached_actor_parameters = trainer.optimization.parameters("actor")
+    assert cached_actor_parameters is trainer.optimization.parameters("actor")
+
+    trainer.optimization.sync_metrics = False
+    assert trainer.update_batch(batch) == {}
+    deferred = trainer.optimization.flush_metrics()
+    assert {"loss", "actor_gradient_norm", "critic_gradient_norm"} <= deferred.keys()
+    assert trainer.optimization.flush_metrics() == {}
+
+    assert trainer.update_batch(batch) == {}
+    saved_runtime = trainer.optimization.state_dict()
+    restored = build_experiment(spec, config, seed=9).trainer.optimization
+    restored.load_state_dict(saved_runtime)
+    assert restored.sync_metrics is False
+    assert restored.flush_metrics() == trainer.optimization.flush_metrics()

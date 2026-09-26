@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,12 +10,16 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec, Transition
 from marl.objectives import LossBundle
-from marl.runtime import TensorReplayBuffer
+from marl.runtime import (
+    SyncVectorEnv,
+    TensorReplayBuffer,
+    environment_steps_to_tensors,
+)
 from marl.training.checkpoint import (
     build_trainer_checkpoint_state,
     load_checkpoint_state,
@@ -26,10 +30,22 @@ from marl.training.checkpoint import (
 from marl.training.optimization import OptimizerRuntime
 
 
-class OffPolicyAlgorithm(Protocol):
-    """trainer 所需能力；更新顺序由具体算法的 ``update`` 定义。"""
+class OffPolicyActor(Protocol):
+    """批量 collector 所需的最小动作能力。"""
 
     spec: EnvironmentSpec
+
+    def act(
+        self,
+        observations: Tensor,
+        *,
+        deterministic: bool = False,
+        action_mask: Tensor | None = None,
+    ) -> Tensor: ...
+
+
+class OffPolicyAlgorithm(OffPolicyActor, Protocol):
+    """trainer 所需能力；更新顺序由具体算法的 ``update`` 定义。"""
 
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
 
@@ -143,6 +159,54 @@ class TemperatureActorCriticUpdateConfig(ActorCriticUpdateConfig):
         )
 
 
+class OffPolicyCollector:
+    """同步向量环境 collector：每个环境时刻只执行一次批量 actor 前向。"""
+
+    def __init__(
+        self,
+        environment: SyncVectorEnv,
+        algorithm: OffPolicyActor,
+        *,
+        device: torch.device | str = "cpu",
+    ) -> None:
+        self.environment = environment
+        self.algorithm = algorithm
+        self.device = torch.device(device)
+
+    def rollout(
+        self,
+        seeds: Sequence[int],
+        *,
+        deterministic: bool = False,
+        action_transform: Callable[[np.ndarray], np.ndarray] | None = None,
+    ) -> Iterator[tuple[Transition, ...]]:
+        steps = self.environment.reset(seeds)
+        while not all(step.done for step in steps):
+            if any(step.done for step in steps):
+                raise RuntimeError("离策略向量环境不支持部分 episode 提前结束")
+            observations, _, action_masks = environment_steps_to_tensors(
+                steps,
+                self.environment.spec,
+                device=self.device,
+            )
+            with torch.inference_mode():
+                actions = self.algorithm.act(
+                    observations,
+                    deterministic=deterministic,
+                    action_mask=action_masks,
+                ).cpu().numpy()
+            if action_transform is not None:
+                actions = action_transform(actions)
+            following = self.environment.step(actions)
+            yield tuple(
+                Transition(current, action, next_step)
+                for current, action, next_step in zip(
+                    steps, actions, following, strict=True
+                )
+            )
+            steps = following
+
+
 class OffPolicyTrainer:
     """拥有 replay 和 optimizer 状态的通用离策略 trainer。"""
 
@@ -173,6 +237,9 @@ class OffPolicyTrainer:
 
     def record(self, transition: Transition) -> None:
         self.replay.add(transition)
+
+    def record_many(self, transitions: Sequence[Transition]) -> None:
+        self.replay.record_many(transitions)
 
     def update(self) -> dict[str, float]:
         if not self.ready:

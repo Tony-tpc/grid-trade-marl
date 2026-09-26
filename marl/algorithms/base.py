@@ -49,6 +49,7 @@ class BaseMARLAlgorithm(nn.Module, ABC):
         bundle: LossBundle,
         max_grad_norm: float | None,
         *,
+        parameters: tuple[nn.Parameter, ...] | None = None,
         drop_zero_gradients: bool = False,
     ) -> Tensor:
         """执行一次通用优化动作，并返回裁剪前梯度范数。
@@ -59,11 +60,12 @@ class BaseMARLAlgorithm(nn.Module, ABC):
 
         optimizer.zero_grad(set_to_none=True)
         bundle.total.backward()
-        parameters = tuple(
-            parameter
-            for group in optimizer.param_groups
-            for parameter in group["params"]
-        )
+        if parameters is None:
+            parameters = tuple(
+                parameter
+                for group in optimizer.param_groups
+                for parameter in group["params"]
+            )
         if drop_zero_gradients:
             for parameter in parameters:
                 if parameter.grad is not None and not torch.count_nonzero(parameter.grad):

@@ -23,7 +23,7 @@ from marl.objectives import (
 )
 from marl.returns import GAEConfig
 from marl.training.on_policy import PPOUpdateConfig, PreparedRollout, RolloutConfig
-from marl.training.optimization import OptimizerRuntime, metrics_to_float
+from marl.training.optimization import OptimizerRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,12 +187,12 @@ class MAPPO(BaseMARLAlgorithm):
             mini_batch_size=self.config.update.mini_batch_size,
             generator=runtime.generator,
         ):
-            mini_batch = mini_batch.to(device, non_blocking=True)
             policy_bundle = self.compute_policy_loss_bundle(mini_batch)
             actor_gradient_norm = self.optimize(
                 runtime.optimizer("actor"),
                 policy_bundle,
                 runtime.max_grad_norm("actor"),
+                parameters=runtime.parameters("actor"),
             )
             runtime.record_optimizer_step()
             value_bundle = self.compute_value_loss_bundle(mini_batch)
@@ -200,6 +200,7 @@ class MAPPO(BaseMARLAlgorithm):
                 runtime.optimizer("critic"),
                 value_bundle,
                 runtime.max_grad_norm("critic"),
+                parameters=runtime.parameters("critic"),
             )
             runtime.record_optimizer_step()
             metrics = {
@@ -223,4 +224,4 @@ class MAPPO(BaseMARLAlgorithm):
         averages["explained_variance"] = self._explained_variance(
             batch.extras["old_values"], batch.extras["returns"]
         ).to(device)
-        return metrics_to_float(averages)
+        return runtime.export_metrics(averages)

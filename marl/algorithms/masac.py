@@ -27,7 +27,7 @@ from marl.training.off_policy import (
     ReplayConfig,
     TemperatureActorCriticUpdateConfig,
 )
-from marl.training.optimization import OptimizerRuntime, metrics_to_float
+from marl.training.optimization import OptimizerRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,6 +194,7 @@ class MASAC(BaseMARLAlgorithm):
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
+            parameters=runtime.parameters("critic"),
         )
         runtime.record_optimizer_step()
         with runtime.autocast(device):
@@ -202,6 +203,7 @@ class MASAC(BaseMARLAlgorithm):
             runtime.optimizer("actor"),
             actor,
             runtime.max_grad_norm("actor"),
+            parameters=runtime.parameters("actor"),
         )
         runtime.record_optimizer_step()
         with runtime.autocast(device):
@@ -210,6 +212,7 @@ class MASAC(BaseMARLAlgorithm):
             runtime.optimizer("temperature"),
             temperature,
             runtime.max_grad_norm("temperature"),
+            parameters=runtime.parameters("temperature"),
         )
         runtime.record_optimizer_step()
         runtime.finish(self.target_pairs())
@@ -223,7 +226,7 @@ class MASAC(BaseMARLAlgorithm):
         metrics["gradient_norm"] = torch.stack(
             (critic_norm, actor_norm, temperature_norm)
         ).max()
-        return metrics_to_float(metrics)
+        return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return ((self.get_submodule("target_critics"), self.get_submodule("critics")),)

@@ -21,7 +21,7 @@ from marl.training.off_policy import (
     OffPolicyUpdateConfig,
     ReplayConfig,
 )
-from marl.training.optimization import OptimizerRuntime, metrics_to_float
+from marl.training.optimization import OptimizerRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,12 +152,13 @@ class QMIX(BaseMARLAlgorithm):
             runtime.optimizer("value"),
             bundle,
             runtime.max_grad_norm("value"),
+            parameters=runtime.parameters("value"),
         )
         runtime.record_optimizer_step()
         runtime.finish(self.target_pairs())
         metrics = dict(bundle.terms)
         metrics["gradient_norm"] = value_norm
-        return metrics_to_float(metrics)
+        return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (

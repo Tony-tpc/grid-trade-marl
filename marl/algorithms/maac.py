@@ -28,7 +28,7 @@ from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     ReplayConfig,
 )
-from marl.training.optimization import OptimizerRuntime, metrics_to_float
+from marl.training.optimization import OptimizerRuntime
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +198,7 @@ class MAAC(BaseMARLAlgorithm):
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
+            parameters=runtime.parameters("critic"),
         )
         runtime.record_optimizer_step()
         actor_totals: dict[str, Tensor] = {}
@@ -210,6 +211,7 @@ class MAAC(BaseMARLAlgorithm):
                     runtime.optimizer("actor"),
                     actor,
                     runtime.max_grad_norm("actor"),
+                    parameters=runtime.parameters("actor"),
                     drop_zero_gradients=True,
                 )
             )
@@ -229,7 +231,7 @@ class MAAC(BaseMARLAlgorithm):
         metrics["gradient_norm"] = torch.maximum(
             metrics["critic_gradient_norm"], metrics["actor_gradient_norm"]
         )
-        return metrics_to_float(metrics)
+        return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (

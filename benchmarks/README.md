@@ -110,3 +110,26 @@ JSON 同目录还会生成 CSV 摘要和 `<report>_artifacts/checkpoints/` 下�
 `benchmark-results/mpe2_simple_adversary.json`。该目录是运行产物，不进入 Git。
 可用 `--algorithms`、`--seeds`、`--train-episodes`、`--eval-episodes`、
 `--horizon` 和 `--hidden-dim` 调整规模。
+
+## 运行路径性能验收
+
+`benchmark_runtime.py` 在同一进程中比较正确性修复后的逐环境基线与批量 collector，
+以及 MAPPO 逐 minibatch 搬运与整批 rollout 搬运：
+
+```powershell
+.\.venv\Scripts\python.exe benchmarks\benchmark_runtime.py `
+  --device cuda --iterations 10 --num-envs 4 --horizon 25 `
+  --mappo-repeats 5 --enforce `
+  --output benchmark-results\runtime_acceptance.json
+```
+
+`--enforce` 要求离策略采集吞吐至少提升 20%、MAPPO 吞吐不低于旧路径的 95%、
+峰值显存增长不超过 25%，并检查 MAPPO 更新后参数在 `1e-5` 容差内等价。
+2026-09-26 在 RTX 4060 Laptop GPU / torch 2.14.0+cu130 上的本地验收为：
+
+- 离策略采集 `2.67×`，峰值显存 `1.0001×`；
+- MAPPO 数据路径 `1.97×`，峰值显存 `1.058×`，最大参数差 `4.33e-7`。
+
+这些数值是本机结果，不作为其他机器的固定性能承诺。当前系统找不到 MSVC `cl.exe`，
+因此没有启用 `torch.compile`；BF16 硬件可用但仍保持默认关闭，避免在未完成算法级
+精度对照前改变数值容差。

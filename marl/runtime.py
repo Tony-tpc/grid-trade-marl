@@ -33,6 +33,40 @@ def resolve_device(name: str = "auto") -> torch.device:
     return device
 
 
+def environment_steps_to_tensors(
+    steps: Sequence[EnvironmentStep],
+    spec: EnvironmentSpec,
+    *,
+    device: torch.device | str,
+) -> tuple[Tensor, Tensor, Tensor | None]:
+    """批量转换环境输出，供 on/off-policy collector 共用一次 actor 前向。"""
+
+    if not steps:
+        raise ValueError("steps 不能为空")
+    observations = torch.as_tensor(
+        np.stack([step.observations for step in steps]),
+        dtype=torch.float32,
+        device=device,
+    )
+    states = torch.as_tensor(
+        np.stack([step.state for step in steps]),
+        dtype=torch.float32,
+        device=device,
+    )
+    action_masks = None
+    if spec.action_kind == ActionKind.DISCRETE:
+        if any(step.action_mask is None for step in steps):
+            raise ValueError("离散环境的每个 step 都必须提供 action_mask")
+        action_masks = torch.as_tensor(
+            np.stack(
+                [step.action_mask for step in steps if step.action_mask is not None]
+            ),
+            dtype=torch.bool,
+            device=device,
+        )
+    return observations, states, action_masks
+
+
 class SyncVectorEnv:
     """Run multiple adapters together and present one policy inference batch."""
 
@@ -61,15 +95,20 @@ class SyncVectorEnv:
 class TensorReplayBuffer:
     """Preallocated CPU ring buffer for fixed-shape environment transitions."""
 
-    def __init__(self, spec: EnvironmentSpec, capacity: int) -> None:
+    def __init__(
+        self, spec: EnvironmentSpec, capacity: int, *, pin_memory: bool = False
+    ) -> None:
         if capacity < 1:
             raise ValueError("capacity 必须大于零")
         self.spec = spec
         self.capacity = capacity
+        self.pin_memory = pin_memory
         self.size = 0
         self.position = 0
         def allocate(*shape: int, dtype: torch.dtype) -> Tensor:
-            return torch.empty((capacity, *shape), dtype=dtype)
+            return torch.empty(
+                (capacity, *shape), dtype=dtype, pin_memory=pin_memory
+            )
         n, o, s = spec.num_agents, spec.observation_dim, spec.state_dim
         action_shape = (n,) if spec.action_kind == ActionKind.DISCRETE else (n, spec.action_dim)
         action_dtype = torch.long if spec.action_kind == ActionKind.DISCRETE else torch.float32
@@ -91,26 +130,76 @@ class TensorReplayBuffer:
         return self.size
 
     def add(self, transition: Transition) -> None:
-        index = self.position
-        current, next_step = transition.current, transition.next
-        for target, source in (
-            (self.observations, current.observations),
-            (self.next_observations, next_step.observations),
-            (self.states, current.state),
-            (self.next_states, next_step.state),
-            (self.actions, transition.actions),
-            (self.rewards, next_step.rewards),
-        ):
-            target[index].copy_(torch.as_tensor(source, dtype=target.dtype))
-        self.terminated[index, 0] = next_step.terminated
-        self.truncated[index, 0] = next_step.truncated
+        self.record_many((transition,))
+
+    def record_many(self, transitions: Sequence[Transition]) -> None:
+        """按环形顺序批量写入 transition，等价于依次调用 ``add``。"""
+
+        if not transitions:
+            return
+        original_count = len(transitions)
+        kept = tuple(transitions[-self.capacity :])
+        start = (self.position + original_count - len(kept)) % self.capacity
+        indices = (torch.arange(len(kept), dtype=torch.long) + start) % self.capacity
+        current_steps = [transition.current for transition in kept]
+        next_steps = [transition.next for transition in kept]
         if self.action_masks is not None and self.next_action_masks is not None:
-            if current.action_mask is None or next_step.action_mask is None:
+            if any(step.action_mask is None for step in (*current_steps, *next_steps)):
                 raise ValueError("离散动作经验必须包含当前及下一步 action_mask")
-            self.action_masks[index].copy_(torch.as_tensor(current.action_mask))
-            self.next_action_masks[index].copy_(torch.as_tensor(next_step.action_mask))
-        self.position = (index + 1) % self.capacity
-        self.size = min(self.size + 1, self.capacity)
+        sources = (
+            (self.observations, np.stack([step.observations for step in current_steps])),
+            (
+                self.next_observations,
+                np.stack([step.observations for step in next_steps]),
+            ),
+            (self.states, np.stack([step.state for step in current_steps])),
+            (self.next_states, np.stack([step.state for step in next_steps])),
+            (self.actions, np.stack([transition.actions for transition in kept])),
+            (self.rewards, np.stack([step.rewards for step in next_steps])),
+        )
+        for target, source in sources:
+            target.index_copy_(
+                0,
+                indices,
+                torch.as_tensor(source, dtype=target.dtype),
+            )
+        self.terminated.index_copy_(
+            0,
+            indices,
+            torch.as_tensor(
+                [[step.terminated] for step in next_steps], dtype=torch.bool
+            ),
+        )
+        self.truncated.index_copy_(
+            0,
+            indices,
+            torch.as_tensor(
+                [[step.truncated] for step in next_steps], dtype=torch.bool
+            ),
+        )
+        if self.action_masks is not None and self.next_action_masks is not None:
+            self.action_masks.index_copy_(
+                0,
+                indices,
+                torch.as_tensor(
+                    np.stack(
+                        [step.action_mask for step in current_steps if step.action_mask is not None]
+                    ),
+                    dtype=torch.bool,
+                ),
+            )
+            self.next_action_masks.index_copy_(
+                0,
+                indices,
+                torch.as_tensor(
+                    np.stack(
+                        [step.action_mask for step in next_steps if step.action_mask is not None]
+                    ),
+                    dtype=torch.bool,
+                ),
+            )
+        self.position = (self.position + original_count) % self.capacity
+        self.size = min(self.size + original_count, self.capacity)
 
     def sample(
         self,
@@ -152,6 +241,7 @@ class TensorReplayBuffer:
             "capacity": self.capacity,
             "size": self.size,
             "position": self.position,
+            "pin_memory": self.pin_memory,
         }
         for name in (
             "observations",
@@ -172,6 +262,8 @@ class TensorReplayBuffer:
     def load_state_dict(self, state: dict[str, object]) -> None:
         if state.get("spec") != self.spec or state.get("capacity") != self.capacity:
             raise ValueError("replay checkpoint 的 EnvironmentSpec 或 capacity 不一致")
+        if state.get("pin_memory", False) != self.pin_memory:
+            raise ValueError("replay checkpoint 的 pin_memory 配置不一致")
         size = state.get("size")
         position = state.get("position")
         if not isinstance(size, int) or not isinstance(position, int):

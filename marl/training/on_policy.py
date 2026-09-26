@@ -15,7 +15,7 @@ from torch import Tensor, nn
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
 from marl.returns import AdvantageEstimator
-from marl.runtime import SyncVectorEnv
+from marl.runtime import SyncVectorEnv, environment_steps_to_tensors
 from marl.training.checkpoint import (
     build_trainer_checkpoint_state,
     load_checkpoint_state,
@@ -52,9 +52,15 @@ class OnPolicyActorCritic(Protocol):
 
 
 def _allocate(
-    horizon: int, num_envs: int, *shape: int, dtype: torch.dtype
+    horizon: int,
+    num_envs: int,
+    *shape: int,
+    dtype: torch.dtype,
+    pin_memory: bool = False,
 ) -> Tensor:
-    return torch.empty((horizon, num_envs, *shape), dtype=dtype)
+    return torch.empty(
+        (horizon, num_envs, *shape), dtype=dtype, pin_memory=pin_memory
+    )
 
 
 def _index_optional(value: Tensor | None, indices: Tensor) -> Tensor | None:
@@ -92,6 +98,13 @@ class PreparedRollout:
     def consumed(self) -> bool:
         return self._consumed
 
+    def to(
+        self, device: torch.device | str, *, non_blocking: bool = False
+    ) -> PreparedRollout:
+        if self._consumed:
+            raise RuntimeError("已消费 rollout 不能再次迁移设备")
+        return PreparedRollout(self.batch.to(device, non_blocking=non_blocking))
+
     def minibatches(
         self,
         *,
@@ -105,7 +118,11 @@ class PreparedRollout:
             raise ValueError("epochs 和 mini_batch_size 必须大于 0")
         self._consumed = True
         for _ in range(epochs):
-            permutation = torch.randperm(self.size, generator=generator)
+            permutation = torch.randperm(
+                self.size,
+                generator=generator,
+                device=self.batch.observations.device,
+            )
             for start in range(0, self.size, mini_batch_size):
                 yield _index_batch(self.batch, permutation[start : start + mini_batch_size])
 
@@ -113,7 +130,14 @@ class PreparedRollout:
 class RolloutBuffer:
     """预分配的固定长度 on-policy rollout；每个实例只能 finish 一次。"""
 
-    def __init__(self, spec: EnvironmentSpec, *, horizon: int, num_envs: int) -> None:
+    def __init__(
+        self,
+        spec: EnvironmentSpec,
+        *,
+        horizon: int,
+        num_envs: int,
+        pin_memory: bool = False,
+    ) -> None:
         if horizon < 1 or num_envs < 1:
             raise ValueError("horizon 和 num_envs 必须大于 0")
         self.spec = spec
@@ -122,18 +146,46 @@ class RolloutBuffer:
         self.position = 0
         self._finished = False
         n, o, s = spec.num_agents, spec.observation_dim, spec.state_dim
-        self.observations = _allocate(horizon, num_envs, n, o, dtype=torch.float32)
-        self.states = _allocate(horizon, num_envs, s, dtype=torch.float32)
+        self.pin_memory = pin_memory
+        self.observations = _allocate(
+            horizon, num_envs, n, o, dtype=torch.float32, pin_memory=pin_memory
+        )
+        self.states = _allocate(
+            horizon, num_envs, s, dtype=torch.float32, pin_memory=pin_memory
+        )
         action_shape = (n,) if spec.action_kind == ActionKind.DISCRETE else (n, spec.action_dim)
         action_dtype = torch.long if spec.action_kind == ActionKind.DISCRETE else torch.float32
-        self.actions = _allocate(horizon, num_envs, *action_shape, dtype=action_dtype)
-        self.rewards = _allocate(horizon, num_envs, n, dtype=torch.float32)
-        self.old_log_prob = _allocate(horizon, num_envs, n, dtype=torch.float32)
-        self.old_values = _allocate(horizon, num_envs, n, dtype=torch.float32)
-        self.terminated = _allocate(horizon, num_envs, n, dtype=torch.bool)
-        self.truncated = _allocate(horizon, num_envs, n, dtype=torch.bool)
+        self.actions = _allocate(
+            horizon,
+            num_envs,
+            *action_shape,
+            dtype=action_dtype,
+            pin_memory=pin_memory,
+        )
+        self.rewards = _allocate(
+            horizon, num_envs, n, dtype=torch.float32, pin_memory=pin_memory
+        )
+        self.old_log_prob = _allocate(
+            horizon, num_envs, n, dtype=torch.float32, pin_memory=pin_memory
+        )
+        self.old_values = _allocate(
+            horizon, num_envs, n, dtype=torch.float32, pin_memory=pin_memory
+        )
+        self.terminated = _allocate(
+            horizon, num_envs, n, dtype=torch.bool, pin_memory=pin_memory
+        )
+        self.truncated = _allocate(
+            horizon, num_envs, n, dtype=torch.bool, pin_memory=pin_memory
+        )
         self.action_masks = (
-            _allocate(horizon, num_envs, n, spec.action_dim, dtype=torch.bool)
+            _allocate(
+                horizon,
+                num_envs,
+                n,
+                spec.action_dim,
+                dtype=torch.bool,
+                pin_memory=pin_memory,
+            )
             if spec.action_kind == ActionKind.DISCRETE
             else None
         )
@@ -302,26 +354,11 @@ class OnPolicyTrainer:
     def _tensors(
         self, steps: Sequence[EnvironmentStep]
     ) -> tuple[Tensor, Tensor, Tensor | None]:
-        observations = torch.as_tensor(
-            np.stack([step.observations for step in steps]),
-            dtype=torch.float32,
+        return environment_steps_to_tensors(
+            steps,
+            self.environment.spec,
             device=self.device,
         )
-        states = torch.as_tensor(
-            np.stack([step.state for step in steps]),
-            dtype=torch.float32,
-            device=self.device,
-        )
-        action_masks = None
-        if self.environment.spec.action_kind == ActionKind.DISCRETE:
-            if any(step.action_mask is None for step in steps):
-                raise ValueError("离散环境的每个 step 都必须提供 action_mask")
-            action_masks = torch.as_tensor(
-                np.stack([step.action_mask for step in steps if step.action_mask is not None]),
-                dtype=torch.bool,
-                device=self.device,
-            )
-        return observations, states, action_masks
 
     def collect(self, seeds: list[int]) -> PreparedRollout:
         if len(seeds) != len(self.environment.adapters):
@@ -331,6 +368,7 @@ class OnPolicyTrainer:
             self.environment.spec,
             horizon=self.rollout_horizon,
             num_envs=len(self.environment.adapters),
+            pin_memory=self.device.type == "cuda",
         )
         for index in range(self.rollout_horizon):
             observations, states, action_masks = self._tensors(steps)
@@ -375,7 +413,13 @@ class OnPolicyTrainer:
         return buffer.finish(next_value, self.estimator)
 
     def train_rollout(self, seeds: list[int]) -> dict[str, float]:
-        return self.algorithm.update(self.collect(seeds), self.optimization)
+        rollout = self.collect(seeds)
+        if self.device.type == "cuda" and not rollout.batch.observations.is_pinned():
+            rollout = PreparedRollout(rollout.batch.pin_memory())
+        return self.algorithm.update(
+            rollout.to(self.device, non_blocking=self.device.type == "cuda"),
+            self.optimization,
+        )
 
     def state_dict(self) -> dict[str, Any]:
         return build_trainer_checkpoint_state(
