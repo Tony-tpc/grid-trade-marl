@@ -10,7 +10,9 @@ from torch import Tensor
 
 @dataclass(frozen=True, slots=True)
 class TD0Estimator:
-    """逐智能体一步 Bellman target，只由 true termination 阻止 bootstrap。"""
+    """逐智能体一步 Bellman target，只由 true termination 阻止 bootstrap。
+        y_t = r_t + gamma (1-done_t)V(s_{t+1})
+    """
 
     gamma: float = 0.99
 
