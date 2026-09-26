@@ -45,25 +45,19 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
         terminated=flags,
         truncated=flags,
     )
-    maddpg_recipe = replace(
-        MADDPGConfig(), value_target=TD0Config(gamma= 0.0)
-    )
-    maddpg = MADDPG(spec(ActionKind.CONTINUOUS), maddpg_recipe)
+    maddpg_config = replace(MADDPGConfig(), value_target=TD0Config(gamma=0.0))
+    maddpg = MADDPG(spec(ActionKind.CONTINUOUS), maddpg_config)
     assert maddpg.get_submodule("policy.actors.0") is not maddpg.get_submodule("policy.actors.1")
     q = maddpg.critics(maddpg._critic_input(observations, actions))
     assert torch.allclose(
         maddpg.compute_loss_bundle(batch).terms["critic_loss"],
         F.mse_loss(q, rewards),
     )
-    masac_recipe = replace(
-        MASACConfig(), value_target=TD0Config(gamma= 0.0)
-    )
-    masac = MASAC(spec(ActionKind.CONTINUOUS), masac_recipe)
+    masac_config = replace(MASACConfig(), value_target=TD0Config(gamma=0.0))
+    masac = MASAC(spec(ActionKind.CONTINUOUS), masac_config)
     q1, q2 = masac.critics(masac._critic_input(observations, actions))
     expected = F.mse_loss(q1, rewards) + F.mse_loss(q2, rewards)
-    assert torch.allclose(
-        masac.compute_loss_bundle(batch).terms["critic_loss"], expected
-    )
+    assert torch.allclose(masac.compute_loss_bundle(batch).terms["critic_loss"], expected)
 
 
 def test_maac_counterfactual_value_ignores_own_replay_action() -> None:

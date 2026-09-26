@@ -36,17 +36,19 @@ def environment_spec() -> EnvironmentSpec:
     )
 
 
-def training_recipe() -> MAPPOConfig:
-    recipe = MAPPOConfig()
+def training_config() -> MAPPOConfig:
+    config = MAPPOConfig()
     return replace(
-        recipe,
-        policy=IndependentDiscreteConfig(hidden_dim= 16),
-        critic=CentralizedValueConfig(hidden_dim= 16),
-        rollout=RolloutConfig(horizon= 3),
-        update=PPOUpdateConfig(learning_rate= 1e-3,
-                epochs= 2,
-                mini_batch_size= 2,
-                max_grad_norm= 0.5,),
+        config,
+        policy=IndependentDiscreteConfig(hidden_dim=16),
+        critic=CentralizedValueConfig(hidden_dim=16),
+        rollout=RolloutConfig(horizon=3),
+        update=PPOUpdateConfig(
+            learning_rate=1e-3,
+            epochs=2,
+            mini_batch_size=2,
+            max_grad_norm=0.5,
+        ),
     )
 
 
@@ -64,12 +66,12 @@ def sample_batch() -> MARLBatch:
     )
 
 
-def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
-    recipe = training_recipe()
+def test_config_construction_is_reproducible_with_fixed_seed() -> None:
+    config = training_config()
     torch.manual_seed(41)
-    first = MAPPO(environment_spec(), recipe)
+    first = MAPPO(environment_spec(), config)
     torch.manual_seed(41)
-    second = MAPPO(environment_spec(), recipe)
+    second = MAPPO(environment_spec(), config)
     batch = sample_batch()
 
     assert torch.allclose(
@@ -85,10 +87,10 @@ def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
         assert torch.allclose(first_bundle.terms[name], second_bundle.terms[name])
 
 
-def test_recipe_rejects_wrong_algorithm_and_invalid_shapes() -> None:
-    recipe = replace(MAPPOConfig(), algorithm="other")  # type: ignore[arg-type]
+def test_config_rejects_wrong_algorithm_and_invalid_shapes() -> None:
+    config = replace(MAPPOConfig(), algorithm="other")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="不匹配"):
-        MAPPO(environment_spec(), recipe)
+        MAPPO(environment_spec(), config)
 
     algorithm = MAPPO(environment_spec(), MAPPOConfig())
     with pytest.raises(ValueError, match="action_mask"):
@@ -150,8 +152,8 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
     tmp_path: Path,
 ) -> None:
     environment = SyncVectorEnv([TinyAdapter(), TinyAdapter()])
-    recipe = training_recipe()
-    experiment = build_experiment(environment, recipe, seed=8)
+    config = training_config()
+    experiment = build_experiment(environment, config, seed=8)
     trainer = experiment.trainer
     algorithm = experiment.algorithm
     before = [parameter.detach().clone() for parameter in algorithm.parameters()]
@@ -159,8 +161,7 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
     after = list(algorithm.parameters())
 
     assert any(
-        not torch.equal(left, right.detach())
-        for left, right in zip(before, after, strict=True)
+        not torch.equal(left, right.detach()) for left, right in zip(before, after, strict=True)
     )
     assert {"policy_loss", "value_loss", "entropy", "approx_kl"} <= metrics.keys()
     assert trainer.update_plan.update_count == 1
@@ -171,7 +172,7 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
     with torch.no_grad():
         for parameter in algorithm.parameters():
             parameter.add_(10.0)
-    restored = build_experiment(environment, recipe, seed=8).trainer
+    restored = build_experiment(environment, config, seed=8).trainer
     restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
     assert restored.update_plan.update_count == 1
@@ -181,7 +182,7 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
         for expected, actual in zip(saved_parameters, restored_algorithm.parameters(), strict=True)
     )
 
-    mismatched = replace(recipe, update=PPOUpdateConfig(epochs= 1))
+    mismatched = replace(config, update=PPOUpdateConfig(epochs=1))
     other_trainer = build_experiment(environment, mismatched, seed=8).trainer
     with pytest.raises(ValueError, match="config"):
         other_trainer.load_checkpoint(checkpoint)

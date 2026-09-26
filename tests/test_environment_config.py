@@ -15,11 +15,7 @@ from marl.envs import (
 
 def test_environment_yaml_is_independent_and_builds_adapter() -> None:
     path = (
-        Path(__file__).parents[1]
-        / "examples"
-        / "configs"
-        / "environments"
-        / "energy_trading.yaml"
+        Path(__file__).parents[1] / "examples" / "configs" / "environments" / "energy_trading.yaml"
     )
     selected = load_environment_config(path)
     config = energy_trading_config_from_environment(selected)
@@ -32,12 +28,10 @@ def test_environment_yaml_is_independent_and_builds_adapter() -> None:
     assert adapter.spec.num_agents == config.num_agents
     assert adapter.spec.horizon == config.horizon
     assert adapter.spec.action_kind == ActionKind.DISCRETE
-    assert set(selected.options) == {
-        item.name for item in fields(EnergyTradingConfig)
-    }
+    assert set(selected.options) == {item.name for item in fields(EnergyTradingConfig)}
 
 
-def test_environment_recipe_rejects_unknown_fields_and_options() -> None:
+def test_environment_config_rejects_unknown_fields_and_options() -> None:
     base: dict[str, object] = {
         "schema_version": 1,
         "environment": "energy_trading",
@@ -47,8 +41,6 @@ def test_environment_recipe_rejects_unknown_fields_and_options() -> None:
     with pytest.raises(ValueError, match="未知字段"):
         environment_config_from_dict({**base, "algorithm": "mappo"})
 
-    selected = environment_config_from_dict(
-        {**base, "options": {"learning_rate": 0.001}}
-    )
+    selected = environment_config_from_dict({**base, "options": {"learning_rate": 0.001}})
     with pytest.raises(ValueError, match="未知字段"):
         energy_trading_config_from_environment(selected)

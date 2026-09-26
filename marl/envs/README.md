@@ -25,7 +25,7 @@ Smart Grid, 2021。论文第 II-IV 节说明设备、市场和 Markov game；第
 
 **本论文是个体收益博弈**：每户得到自己的 `r_i`，策略 `pi_i` 追求自己的 `J_i`。
 MAAC/MADDPG/MASAC/MAPPO 保留 `[B,N]` 的逐智能体奖励与价值；QMIX 要求
-所有智能体共享同一团队奖励，配置工厂会拒绝将其直接用于本论文环境。
+所有智能体共享同一团队奖励，算法配置的 validate 会拒绝将其直接用于本论文环境。
 
 默认外生曲线是合成数据。论文使用的 Ausgrid 负荷/PV、室外温度和零售电价，
 以及家庭参数分布，并未包含在本仓库。因此这里只是**论文启发的基础环境**，
@@ -68,11 +68,11 @@ adapter = EnergyTradingAdapter(environment, ActionKind.DISCRETE)
 `Transition(current, actions, next)` 记录一步经验；
 `transitions_to_batch([...])` 将多步经验堆叠为 `MARLBatch`。
 具体适配器在返回时调用 `validate_step()`，会检查观测、状态、奖励和动作掩码维度。
-`MAAC.from_recipe(adapter.spec, recipe)` 从 EnvironmentSpec 注入智能体数、观测、
+`MAAC(adapter.spec, MAACConfig())` 从 EnvironmentSpec 注入智能体数、观测、
 动作和全局状态维度。训练器和算法不读取 `EnergyTradingEnv` 的内部字段。
 
 若新论文环境的观测编码、奖励公式或结算规则不同，实现新的具体环境与适配器即可。
-若动作空间从离散变为连续，需要选择与动作类型匹配的算法；recipe 编译会检测这点。
+若动作空间从离散变为连续，需要选择与动作类型匹配的算法；算法配置的 validate 会检测这点。
 若新论文需要可变数量智能体、异质动作维度或混合动作分布，则还需扩展通用模型能力；
 仅做数据格式转换不足以改变算法的数学定义。
 
@@ -103,3 +103,6 @@ class NewPaperAdapter(EnvironmentAdapter):
 完成后，现有训练代码仍通过 `adapter.spec` 创建配置，再把 transition 转为
 `MARLBatch`。需要注意 `MAPPO` 为 on-policy，还需 rollout/GAE 计算
 `old_log_prob`、`advantages` 和 `returns`；环境适配层本身不生成这些算法量。
+
+环境 YAML 使用 `load_environment_config()` 读取，由 `build_energy_trading_adapter()` 构造。
+算法和 trainer 使用 `build_experiment(adapter, algorithm_config)` 一次装配。

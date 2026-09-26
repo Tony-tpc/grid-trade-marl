@@ -69,15 +69,15 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
         8,
         RewardStructure.INDIVIDUAL,
     )
-    recipe = MAACConfig()
-    recipe = replace(
-        recipe,
-        policy=IndependentDiscreteConfig(hidden_dim= 16),
-        critic=AttentionQConfig(hidden_dim= 16, attention_heads= 4),
-        replay=ReplayConfig(capacity= 8, batch_size= 4),
-        update=OffPolicyUpdateConfig(learning_rate= 1e-3, max_grad_norm= 0.5),
+    config = MAACConfig()
+    config = replace(
+        config,
+        policy=IndependentDiscreteConfig(hidden_dim=16),
+        critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
+        replay=ReplayConfig(capacity=8, batch_size=4),
+        update=OffPolicyUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
     )
-    experiment = build_experiment(spec, recipe, seed=8)
+    experiment = build_experiment(spec, config, seed=8)
     trainer = experiment.trainer
     algorithm = experiment.algorithm
     observations = torch.randn(4, 2, 3)

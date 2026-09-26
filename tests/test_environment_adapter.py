@@ -33,7 +33,7 @@ from marl.modules.policy import IndependentDiscreteConfig
 from marl.training.off_policy import ReplayConfig
 
 
-def test_energy_adapter_builds_recipe_algorithm_and_trainable_batch() -> None:
+def test_energy_adapter_builds_config_algorithm_and_trainable_batch() -> None:
     config = EnergyTradingConfig(num_agents=2, has_sa=(True, False))
     adapter = EnergyTradingAdapter(EnergyTradingEnv(config), ActionKind.DISCRETE)
     spec = adapter.spec
@@ -59,13 +59,13 @@ def test_energy_adapter_builds_recipe_algorithm_and_trainable_batch() -> None:
     assert batch.rewards is not None and batch.rewards.shape == (3, 2)
     assert batch.state is not None and batch.state.shape == (3, spec.state_dim)
 
-    recipe = replace(
+    algorithm_config = replace(
         MAACConfig(),
-        policy=IndependentDiscreteConfig(hidden_dim= 16),
-        critic=AttentionQConfig(hidden_dim= 16, attention_heads= 4),
-        replay=ReplayConfig(capacity= 8, batch_size= 3),
+        policy=IndependentDiscreteConfig(hidden_dim=16),
+        critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
+        replay=ReplayConfig(capacity=8, batch_size=3),
     )
-    trainer = build_experiment(spec, recipe, seed=8).trainer
+    trainer = build_experiment(spec, algorithm_config, seed=8).trainer
     metrics = trainer.update_batch(batch)
     assert np.isfinite(metrics["loss"])
 

@@ -24,19 +24,17 @@ from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
 
 def spec() -> EnvironmentSpec:
-    return EnvironmentSpec(
-        2, 3, 2, 6, ActionKind.CONTINUOUS, 4, RewardStructure.INDIVIDUAL
-    )
+    return EnvironmentSpec(2, 3, 2, 6, ActionKind.CONTINUOUS, 4, RewardStructure.INDIVIDUAL)
 
 
-def recipe():
+def training_config() -> MADDPGConfig:
     return replace(
         MADDPGConfig(),
-        policy=IndependentDeterministicConfig(hidden_dim= 16),
-        critic=IndependentQConfig(hidden_dim= 16),
-        replay=ReplayConfig(capacity= 4, batch_size= 2),
-        update=OffPolicyUpdateConfig(learning_rate= 1e-3, max_grad_norm= 0.5),
-        target_update=SoftTargetConfig(tau= 0.5),
+        policy=IndependentDeterministicConfig(hidden_dim=16),
+        critic=IndependentQConfig(hidden_dim=16),
+        replay=ReplayConfig(capacity=4, batch_size=2),
+        update=OffPolicyUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
+        target_update=SoftTargetConfig(tau=0.5),
     )
 
 
@@ -75,9 +73,9 @@ def transition(value: float) -> Transition:
 
 
 def test_off_policy_update_changes_online_and_target_parameters() -> None:
-    algorithm = MADDPG(spec(), recipe())
-    trainer = build_experiment(spec(), recipe(), seed=8).trainer
+    trainer = build_experiment(spec(), training_config(), seed=8).trainer
     algorithm = trainer.algorithm
+    assert isinstance(algorithm, MADDPG)
     optimized_ids = {
         id(parameter)
         for group in trainer.update_plan.optimizer.param_groups
@@ -101,9 +99,8 @@ def test_off_policy_update_changes_online_and_target_parameters() -> None:
 
 
 def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> None:
-    selected_recipe = recipe()
-    algorithm = MADDPG(spec(), selected_recipe)
-    trainer = build_experiment(spec(), selected_recipe, seed=8).trainer
+    selected_config = training_config()
+    trainer = build_experiment(spec(), selected_config, seed=8).trainer
     algorithm = trainer.algorithm
     trainer.record(transition(1.0))
     trainer.record(transition(2.0))
@@ -113,22 +110,19 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
     trainer.save_checkpoint(checkpoint)
     expected = [parameter.detach().clone() for parameter in algorithm.parameters()]
 
-    restored_algorithm = MADDPG(spec(), selected_recipe)
-    restored = build_experiment(spec(), selected_recipe, seed=8).trainer
+    restored = build_experiment(spec(), selected_config, seed=8).trainer
     restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
     assert len(restored.replay) == 2
     assert restored.update_plan.update_count == 1
     assert all(
         torch.equal(left, right.detach())
-        for left, right in zip(
-            expected, restored_algorithm.parameters(), strict=True
-        )
+        for left, right in zip(expected, restored_algorithm.parameters(), strict=True)
     )
 
     mismatched = replace(
-        selected_recipe,
-        target_update=SoftTargetConfig(tau= 0.1),
+        selected_config,
+        target_update=SoftTargetConfig(tau=0.1),
     )
     other_trainer = build_experiment(spec(), mismatched, seed=8).trainer
     with pytest.raises(ValueError, match="config"):

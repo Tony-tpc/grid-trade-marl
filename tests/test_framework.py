@@ -46,9 +46,7 @@ def test_actor_and_mask() -> None:
     observations = torch.randn(8, 3, 6)
     mask = torch.tensor([True, False, False, False]).expand(8, 3, 4)
     result = actor(observations, deterministic=True, action_mask=mask)
-    evaluated = actor.evaluate_actions(
-        observations, result.actions, action_mask=mask
-    )
+    evaluated = actor.evaluate_actions(observations, result.actions, action_mask=mask)
     assert result.actions.shape == (8, 3)
     assert torch.equal(result.actions, torch.zeros_like(result.actions))
     assert torch.equal(evaluated.actions, result.actions)
@@ -66,9 +64,7 @@ def test_independent_policy_only_stacks_actor_results() -> None:
     mask[..., 1, 3] = False
 
     sampled = policy.act(observations, deterministic=True, action_mask=mask)
-    evaluated = policy.evaluate(
-        observations, sampled.actions, action_mask=mask
-    )
+    evaluated = policy.evaluate(observations, sampled.actions, action_mask=mask)
 
     assert sampled.actions.shape == (5, 2)
     assert sampled.log_prob is not None and sampled.log_prob.shape == (5, 2)
@@ -88,7 +84,7 @@ def test_mixers() -> None:
     assert QMixer(3, 10)(agent_q, state).shape == (7, 1)
 
 
-def test_all_algorithms_are_recipe_built_direct_base_subclasses() -> None:
+def test_all_algorithms_are_config_built_direct_base_subclasses() -> None:
     batch_size, agents, obs_dim = 4, 2, 3
     observations = torch.randn(batch_size, agents, obs_dim)
     next_observations = torch.randn_like(observations)
@@ -100,9 +96,7 @@ def test_all_algorithms_are_recipe_built_direct_base_subclasses() -> None:
     continuous = EnvironmentSpec(
         agents, obs_dim, 2, 6, ActionKind.CONTINUOUS, 8, RewardStructure.INDIVIDUAL
     )
-    shared = EnvironmentSpec(
-        agents, obs_dim, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.SHARED
-    )
+    shared = EnvironmentSpec(agents, obs_dim, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.SHARED)
     maac = MAAC(discrete, MAACConfig())
     maac_batch = MARLBatch(
         observations=observations,

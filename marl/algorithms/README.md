@@ -1,6 +1,8 @@
 # MARL 算法源码阅读导引
 
-这份说明用于辅助阅读同目录下的算法实现。建议先阅读 `base.py`，再按
+每个算法文件顶部定义该算法的 Config 与 loss 参数；构造函数直接列出组件。
+实验从 `build_experiment(env, config)` 进入，YAML 由 `load_algorithm_config()` 读取。
+建议先阅读 `base.py`，再按
 `MAPPO -> MADDPG -> MASAC -> QMIX -> MAAC` 的顺序阅读。
 
 ## 1. 常用符号和张量形状
@@ -20,7 +22,7 @@
 - `actions [B,N,A]`：连续动作向量。
 - `rewards [B,N]`：每个智能体的奖励。个体收益博弈保留每个 `r_i`；
   QMIX 等纯合作算法应由环境明确提供相同团队奖励。
-- `dones [B,N]`：值为 1 表示 episode 已终止，不能继续 bootstrap。
+- `terminated [B,N]`：真实终止，阻止 bootstrap；`truncated` 保留 bootstrap，停止跨 episode 递推。
 - `state [B,S]`：训练 Critic/Mixer 时可使用的全局信息。
 
 `...` 或 `*B` 表示前面可以有多个维度。例如 rollout 可能使用
@@ -67,7 +69,7 @@ MAPPO、MASAC 和 MAAC 都采用这种思路；QMIX 则在训练阶段用 Mixer 
 
 ### 冻结参数
 
-`BaseMARLAlgorithm.frozen(critic)` 暂时把 Critic 参数设为不求梯度，但保留输出对输入
+`marl.training.gradients.frozen_parameters(critic)` 暂时把 Critic 参数设为不求梯度，但保留输出对输入
 action 的梯度。这样梯度能穿过 Critic 回到 Actor，却不会错误地由 Actor loss 更新
 Critic 参数。
 
@@ -86,7 +88,7 @@ chosen_q = all_q.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
 TD 学习的常见一步目标是：
 
 ```text
-target = reward + gamma * (1 - done) * next_value
+target = reward + gamma * (1 - terminated) * next_value
 ```
 
 如果 next_value 由同一个快速变化的在线网络产生，标签本身也会剧烈变化。目标网络是
@@ -116,7 +118,7 @@ MAPPO 使用完整的 fresh on-policy 链路：`OnPolicyTrainer` 采集固定 ho
 
 MAAC、MADDPG、MASAC、QMIX 使用 `OffPolicyTrainer`：trainer 持有 replay buffer，
 `OffPolicyUpdatePlan` 统一执行 `LossBundle.total.backward()`、梯度裁剪、optimizer step
-和 recipe 选择的 soft/hard target update。具体算法只实现 `compute_loss_bundle()` 和
+和 config 选择的 soft/hard target update。具体算法只实现 `compute_loss_bundle()` 和
 `target_pairs()`，不直接更新参数。
 
 ## 8. 当前基础版本的边界
