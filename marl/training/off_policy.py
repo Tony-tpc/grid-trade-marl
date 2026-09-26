@@ -18,9 +18,9 @@ from marl.objectives import LossBundle
 from marl.runtime import TensorReplayBuffer
 
 if TYPE_CHECKING:
-    from marl.components import TargetUpdate
     from marl.recipes import AlgorithmRecipe
     from marl.registry import ComponentRegistry
+    from marl.target_updates import TargetUpdate
 
 
 class OffPolicyAlgorithm(Protocol):
@@ -49,10 +49,13 @@ class ReplayConfig:
 
 @dataclass(frozen=True, slots=True)
 class OffPolicyUpdateConfig:
+    learning_rate: float = 3e-4
     max_grad_norm: float | None = 10.0
     amp_dtype: torch.dtype | None = None
 
     def __post_init__(self) -> None:
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate 必须大于 0")
         if self.max_grad_norm is not None and self.max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm 必须大于 0 或为 None")
         if self.amp_dtype not in (None, torch.bfloat16):

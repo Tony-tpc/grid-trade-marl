@@ -6,12 +6,14 @@
 
 from __future__ import annotations
 
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
 
 from marl.core import MARLModelOutput
+from marl.envs.base import EnvironmentSpec
 from marl.models.mlp import MLPBackbone
 from marl.modules.action_head import (
     ActionHeadOutput,
@@ -260,3 +262,62 @@ class SharedDiscreteQPolicy(nn.Module):
                 ~action_mask.bool(), torch.finfo(q_values.dtype).min
             )
         return MARLModelOutput(actions=q_values.argmax(dim=-1), logits=q_values)
+
+@dataclass(frozen=True, slots=True)
+class IndependentDiscreteConfig:
+    kind: Literal["independent_discrete"] = "independent_discrete"
+    hidden_dim: int = 128
+
+    def __post_init__(self) -> None:
+        if self.hidden_dim < 1:
+            raise ValueError("hidden_dim 必须大于 0")
+
+    def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy:
+        return IndependentDiscretePolicy(
+            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentDeterministicConfig:
+    kind: Literal["independent_deterministic"] = "independent_deterministic"
+    hidden_dim: int = 128
+
+    def __post_init__(self) -> None:
+        if self.hidden_dim < 1:
+            raise ValueError("hidden_dim 必须大于 0")
+
+    def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy:
+        return IndependentDeterministicPolicy(
+            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class IndependentGaussianConfig:
+    kind: Literal["independent_gaussian"] = "independent_gaussian"
+    hidden_dim: int = 128
+
+    def __post_init__(self) -> None:
+        if self.hidden_dim < 1:
+            raise ValueError("hidden_dim 必须大于 0")
+
+    def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy:
+        return IndependentGaussianPolicy(
+            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SharedDiscreteQConfig:
+    kind: Literal["shared_discrete_q"] = "shared_discrete_q"
+    hidden_dim: int = 128
+
+    def __post_init__(self) -> None:
+        if self.hidden_dim < 1:
+            raise ValueError("hidden_dim 必须大于 0")
+
+    def build(self, spec: EnvironmentSpec) -> SharedDiscreteQPolicy:
+        return SharedDiscreteQPolicy(
+            spec.observation_dim, spec.action_dim, self.hidden_dim,
+        )

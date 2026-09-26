@@ -15,7 +15,7 @@ from torch import Tensor, nn
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
 from marl.objectives import LossBundle
-from marl.returns import GAEEstimator
+from marl.returns import AdvantageEstimator, GAEEstimator
 from marl.runtime import SyncVectorEnv
 
 if TYPE_CHECKING:
@@ -175,7 +175,7 @@ class RolloutBuffer:
             self._copy(self.action_masks, action_masks, "action_masks")
         self.position += 1
 
-    def finish(self, next_value: Tensor, estimator: GAEEstimator) -> PreparedRollout:
+    def finish(self, next_value: Tensor, estimator: AdvantageEstimator) -> PreparedRollout:
         if self._finished:
             raise RuntimeError("rollout 已经 finish")
         if self.position != self.horizon:
@@ -218,11 +218,14 @@ class RolloutBuffer:
 
 @dataclass(frozen=True, slots=True)
 class PPOUpdateConfig:
+    learning_rate: float = 3e-4
     epochs: int = 4
     mini_batch_size: int = 256
     max_grad_norm: float | None = 10.0
 
     def __post_init__(self) -> None:
+        if self.learning_rate <= 0:
+            raise ValueError("learning_rate 必须大于 0")
         if self.epochs < 1 or self.mini_batch_size < 1:
             raise ValueError("epochs 和 mini_batch_size 必须大于 0")
         if self.max_grad_norm is not None and self.max_grad_norm <= 0.0:
@@ -317,7 +320,7 @@ class OnPolicyTrainer:
         self,
         environment: SyncVectorEnv,
         algorithm: OnPolicyActorCritic,
-        estimator: GAEEstimator,
+        estimator: AdvantageEstimator,
         rollout_horizon: int,
         update_plan: PPOUpdatePlan,
         *,
@@ -509,3 +512,11 @@ class OnPolicyTrainer:
         if not isinstance(state, Mapping):
             raise TypeError("trainer checkpoint 顶层必须是 mapping")
         self.load_state_dict(cast(Mapping[str, Any], state))
+
+@dataclass(frozen=True, slots=True)
+class RolloutConfig:
+    horizon: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.horizon is not None and self.horizon < 1:
+            raise ValueError("rollout horizon 必须大于 0 或为 None")

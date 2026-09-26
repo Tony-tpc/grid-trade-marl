@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 from torch import Tensor, nn
 
@@ -10,7 +11,8 @@ from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import EnvironmentSpec
-from marl.modules.policy import IndependentDiscretePolicy
+from marl.modules.critic import CentralizedValueConfig
+from marl.modules.policy import IndependentDiscreteConfig, IndependentDiscretePolicy
 from marl.objectives import (
     EntropyObjective,
     LossBundle,
@@ -19,6 +21,34 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
+from marl.returns import GAEConfig
+from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
+
+
+@dataclass(frozen=True, slots=True)
+class MAPPOLossConfig:
+    clip_ratio: float = 0.2
+    value_coefficient: float = 0.5
+    entropy_coefficient: float = 0.01
+
+    def __post_init__(self) -> None:
+        PPOClipObjective(self.clip_ratio)
+        ValueMSEObjective(self.value_coefficient)
+        EntropyObjective(self.entropy_coefficient)
+
+
+@dataclass(frozen=True, slots=True)
+class MAPPOConfig:
+    """MAPPO 配置；环境尺寸由 spec 注入。"""
+
+    schema_version: Literal[1] = 1
+    algorithm: Literal["mappo"] = "mappo"
+    policy: IndependentDiscreteConfig = IndependentDiscreteConfig()
+    critic: CentralizedValueConfig = CentralizedValueConfig()
+    loss: MAPPOLossConfig = MAPPOLossConfig()
+    advantage: GAEConfig = GAEConfig()
+    rollout: RolloutConfig = RolloutConfig()
+    update: PPOUpdateConfig = PPOUpdateConfig()
 
 
 def default_mappo_recipe() -> AlgorithmRecipe:

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
@@ -13,8 +14,8 @@ from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import AttentionCritic
-from marl.modules.policy import IndependentDiscretePolicy
+from marl.modules.critic import AttentionCritic, AttentionQConfig
+from marl.modules.policy import IndependentDiscreteConfig, IndependentDiscretePolicy
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
@@ -23,7 +24,34 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Estimator
+from marl.returns import TD0Config, TD0Estimator
+from marl.target_updates import HardTargetConfig, SoftTargetConfig
+from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+
+
+@dataclass(frozen=True, slots=True)
+class MAACLossConfig:
+    td_coefficient: float = 1.0
+    entropy_coefficient: float = 0.01
+
+    def __post_init__(self) -> None:
+        TDLossObjective(self.td_coefficient)
+        EntropyObjective(self.entropy_coefficient)
+
+
+@dataclass(frozen=True, slots=True)
+class MAACConfig:
+    """MAAC 配置；环境尺寸由 spec 注入。"""
+
+    schema_version: Literal[1] = 1
+    algorithm: Literal["maac"] = "maac"
+    policy: IndependentDiscreteConfig = IndependentDiscreteConfig()
+    critic: AttentionQConfig = AttentionQConfig()
+    loss: MAACLossConfig = MAACLossConfig()
+    value_target: TD0Config = TD0Config()
+    replay: ReplayConfig = ReplayConfig()
+    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
+    target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
 def default_maac_recipe() -> AlgorithmRecipe:

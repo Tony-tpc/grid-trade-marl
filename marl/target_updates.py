@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
 import torch
 from torch import nn
@@ -51,3 +52,30 @@ class HardTargetUpdate:
     def step(self, pairs: Iterable[tuple[nn.Module, nn.Module]]) -> None:
         for target, online in pairs:
             target.load_state_dict(online.state_dict())
+
+class TargetUpdate(Protocol):
+    def step(self, pairs: Iterable[tuple[nn.Module, nn.Module]]) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class SoftTargetConfig:
+    kind: Literal["soft"] = "soft"
+    tau: float = 0.005
+
+    def __post_init__(self) -> None:
+        SoftTargetUpdate(self.tau)
+
+    def build(self) -> SoftTargetUpdate:
+        return SoftTargetUpdate(self.tau)
+
+
+@dataclass(frozen=True, slots=True)
+class HardTargetConfig:
+    kind: Literal["hard"] = "hard"
+    interval: int = 1
+
+    def __post_init__(self) -> None:
+        HardTargetUpdate(self.interval)
+
+    def build(self) -> HardTargetUpdate:
+        return HardTargetUpdate(self.interval)

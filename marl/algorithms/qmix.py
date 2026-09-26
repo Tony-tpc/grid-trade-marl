@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
@@ -12,12 +13,37 @@ from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
-from marl.modules.mixer import QMixer
-from marl.modules.policy import SharedDiscreteQPolicy
+from marl.modules.mixer import QMixer, QMixerConfig
+from marl.modules.policy import SharedDiscreteQConfig, SharedDiscreteQPolicy
 from marl.objectives import LossBundle, ObjectiveResult, TDLossObjective
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Estimator
+from marl.returns import TD0Config, TD0Estimator
+from marl.target_updates import HardTargetConfig, SoftTargetConfig
+from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+
+
+@dataclass(frozen=True, slots=True)
+class QMIXLossConfig:
+    td_coefficient: float = 1.0
+
+    def __post_init__(self) -> None:
+        TDLossObjective(self.td_coefficient)
+
+
+@dataclass(frozen=True, slots=True)
+class QMIXConfig:
+    """QMIX 配置；环境尺寸由 spec 注入。"""
+
+    schema_version: Literal[1] = 1
+    algorithm: Literal["qmix"] = "qmix"
+    policy: SharedDiscreteQConfig = SharedDiscreteQConfig()
+    mixer: QMixerConfig = QMixerConfig()
+    loss: QMIXLossConfig = QMIXLossConfig()
+    value_target: TD0Config = TD0Config()
+    replay: ReplayConfig = ReplayConfig()
+    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
+    target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
 def default_qmix_recipe() -> AlgorithmRecipe:

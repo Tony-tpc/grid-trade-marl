@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
+
+from marl.envs.base import EnvironmentSpec
 
 
 class VDNMixer(nn.Module):
@@ -42,3 +45,15 @@ class QMixer(nn.Module):
         w2 = self.hyper_w2(flat_state).abs().view(-1, self.mixing_dim, 1)
         total = torch.bmm(hidden, w2) + self.value(flat_state).view(-1, 1, 1)
         return cast(Tensor, total.view(*leading, 1))
+
+@dataclass(frozen=True, slots=True)
+class QMixerConfig:
+    kind: Literal["qmix_mixer"] = "qmix_mixer"
+    mixing_dim: int = 32
+
+    def __post_init__(self) -> None:
+        if self.mixing_dim < 1:
+            raise ValueError("mixing_dim 必须大于 0")
+
+    def build(self, spec: EnvironmentSpec) -> QMixer:
+        return QMixer(spec.num_agents, spec.state_dim, self.mixing_dim)

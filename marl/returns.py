@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, Protocol
 
 import torch
 from torch import Tensor
@@ -99,3 +100,45 @@ class GAEEstimator:
                 raw_advantages.var(unbiased=False) + self.normalization_epsilon
             )
         return advantages, returns
+
+class AdvantageEstimator(Protocol):
+    """输入 [T,...,N]；输出相同形状的 advantage 和 return。"""
+
+    def estimate(
+        self, rewards: Tensor, values: Tensor, next_value: Tensor,
+        terminated: Tensor, truncated: Tensor,
+    ) -> tuple[Tensor, Tensor]: ...
+
+
+class ValueTargetEstimator(Protocol):
+    """逐智能体 Bellman target 能力，与 GAE 时序接口分开。"""
+
+    def estimate(
+        self, rewards: Tensor, next_values: Tensor, terminated: Tensor,
+    ) -> Tensor: ...
+
+
+@dataclass(frozen=True, slots=True)
+class GAEConfig:
+    kind: Literal["gae"] = "gae"
+    gamma: float = 0.99
+    gae_lambda: float = 0.95
+    normalize: bool = True
+
+    def __post_init__(self) -> None:
+        GAEEstimator(self.gamma, self.gae_lambda, self.normalize)
+
+    def build(self) -> GAEEstimator:
+        return GAEEstimator(self.gamma, self.gae_lambda, self.normalize)
+
+
+@dataclass(frozen=True, slots=True)
+class TD0Config:
+    kind: Literal["td0"] = "td0"
+    gamma: float = 0.99
+
+    def __post_init__(self) -> None:
+        TD0Estimator(self.gamma)
+
+    def build(self) -> TD0Estimator:
+        return TD0Estimator(self.gamma)

@@ -8,7 +8,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast
+from dataclasses import dataclass
+from typing import Literal, cast
 
 import torch
 from torch import Tensor, nn
@@ -17,8 +18,8 @@ from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import IndependentCentralizedCritics
-from marl.modules.policy import IndependentDeterministicPolicy
+from marl.modules.critic import IndependentCentralizedCritics, IndependentQConfig
+from marl.modules.policy import IndependentDeterministicConfig, IndependentDeterministicPolicy
 from marl.objectives import (
     DeterministicPolicyObjective,
     LossBundle,
@@ -26,8 +27,33 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Estimator
+from marl.returns import TD0Config, TD0Estimator
+from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
+from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+
+
+@dataclass(frozen=True, slots=True)
+class MADDPGLossConfig:
+    td_coefficient: float = 1.0
+
+    def __post_init__(self) -> None:
+        TDLossObjective(self.td_coefficient)
+
+
+@dataclass(frozen=True, slots=True)
+class MADDPGConfig:
+    """MADDPG 配置；环境尺寸由 spec 注入。"""
+
+    schema_version: Literal[1] = 1
+    algorithm: Literal["maddpg"] = "maddpg"
+    policy: IndependentDeterministicConfig = IndependentDeterministicConfig()
+    critic: IndependentQConfig = IndependentQConfig()
+    loss: MADDPGLossConfig = MADDPGLossConfig()
+    value_target: TD0Config = TD0Config()
+    replay: ReplayConfig = ReplayConfig()
+    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
+    target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
 def default_maddpg_recipe() -> AlgorithmRecipe:
