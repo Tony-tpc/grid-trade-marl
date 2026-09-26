@@ -41,6 +41,7 @@ class GAEEstimator:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     normalize: bool = True
+    normalization_scope: Literal["per_agent", "global"] = "per_agent"
     normalization_epsilon: float = 1e-8
 
     def __post_init__(self) -> None:
@@ -48,6 +49,8 @@ class GAEEstimator:
             raise ValueError("gamma 必须位于 [0, 1]")
         if not 0.0 <= self.gae_lambda <= 1.0:
             raise ValueError("gae_lambda 必须位于 [0, 1]")
+        if self.normalization_scope not in ("per_agent", "global"):
+            raise ValueError("normalization_scope 必须是 'per_agent' 或 'global'")
         if self.normalization_epsilon <= 0.0:
             raise ValueError("normalization_epsilon 必须大于 0")
 
@@ -96,8 +99,20 @@ class GAEEstimator:
         returns = advantages + values
         if self.normalize:
             raw_advantages = advantages
-            advantages = (raw_advantages - raw_advantages.mean()) / torch.sqrt(
-                raw_advantages.var(unbiased=False) + self.normalization_epsilon
+            if self.normalization_scope == "per_agent":
+                # 公共约定是 [T,...,N]。只在时间和环境批次维上统计，绝不把
+                # 最后一维的不同智能体奖励分布混到同一组均值/方差中。
+                reduction_dims = tuple(range(raw_advantages.ndim - 1))
+                mean = raw_advantages.mean(dim=reduction_dims, keepdim=True)
+                variance = raw_advantages.var(
+                    dim=reduction_dims, unbiased=False, keepdim=True
+                )
+            else:
+                # 显式兼容旧实验：跨时间、环境和智能体进行全局标准化。
+                mean = raw_advantages.mean()
+                variance = raw_advantages.var(unbiased=False)
+            advantages = (raw_advantages - mean) / torch.sqrt(
+                variance + self.normalization_epsilon
             )
         return advantages, returns
 
@@ -124,13 +139,21 @@ class GAEConfig:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     normalize: bool = True
+    normalization_scope: Literal["per_agent", "global"] = "per_agent"
 
     def __post_init__(self) -> None:
         if not 0 <= self.gamma <= 1 or not 0 <= self.gae_lambda <= 1:
             raise ValueError("gamma/gae_lambda 必须位于 [0,1]")
+        if self.normalization_scope not in ("per_agent", "global"):
+            raise ValueError("normalization_scope 必须是 'per_agent' 或 'global'")
 
     def build(self) -> GAEEstimator:
-        return GAEEstimator(self.gamma, self.gae_lambda, self.normalize)
+        return GAEEstimator(
+            gamma=self.gamma,
+            gae_lambda=self.gae_lambda,
+            normalize=self.normalize,
+            normalization_scope=self.normalization_scope,
+        )
 
 
 @dataclass(frozen=True, slots=True)

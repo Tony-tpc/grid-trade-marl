@@ -64,8 +64,51 @@ def test_gae_keeps_individual_agent_returns_and_normalizes_advantage() -> None:
         rewards, values, torch.zeros(1, 2), flags, flags
     )
     assert torch.equal(returns, rewards)
-    assert torch.allclose(advantages.mean(), torch.tensor(0.0), atol=1e-6)
-    assert torch.allclose(advantages.var(unbiased=False), torch.tensor(1.0), atol=1e-6)
+    assert torch.allclose(advantages.mean(dim=(0, 1)), torch.zeros(2), atol=1e-6)
+    assert torch.allclose(
+        advantages.var(dim=(0, 1), unbiased=False), torch.ones(2), atol=1e-6
+    )
+
+
+def test_gae_per_agent_normalization_is_invariant_to_other_agent_scale() -> None:
+    estimator = GAEEstimator(gamma=0.0, gae_lambda=0.0, normalize=True)
+    rewards = torch.tensor([[[1.0, 10.0]], [[3.0, 20.0]], [[5.0, 30.0]]])
+    scaled_rewards = rewards.clone()
+    scaled_rewards[..., 1] *= 1000.0
+    values = torch.zeros_like(rewards)
+    flags = torch.zeros_like(rewards, dtype=torch.bool)
+
+    advantages, returns = estimator.estimate(
+        rewards, values, torch.zeros(1, 2), flags, flags
+    )
+    scaled_advantages, scaled_returns = estimator.estimate(
+        scaled_rewards, values, torch.zeros(1, 2), flags, flags
+    )
+
+    assert torch.allclose(advantages[..., 0], scaled_advantages[..., 0])
+    assert torch.equal(returns, rewards)
+    assert torch.equal(scaled_returns, scaled_rewards)
+
+
+def test_gae_global_normalization_preserves_legacy_behavior() -> None:
+    estimator = GAEEstimator(
+        gamma=0.0,
+        gae_lambda=0.0,
+        normalize=True,
+        normalization_scope="global",
+    )
+    rewards = torch.tensor([[[1.0, 10.0]], [[3.0, 20.0]]])
+    values = torch.zeros_like(rewards)
+    flags = torch.zeros_like(rewards, dtype=torch.bool)
+
+    advantages, returns = estimator.estimate(
+        rewards, values, torch.zeros(1, 2), flags, flags
+    )
+    expected = (rewards - rewards.mean()) / torch.sqrt(
+        rewards.var(unbiased=False) + estimator.normalization_epsilon
+    )
+    assert torch.allclose(advantages, expected)
+    assert torch.equal(returns, rewards)
 
 
 def test_td0_bootstraps_truncation_but_not_termination() -> None:

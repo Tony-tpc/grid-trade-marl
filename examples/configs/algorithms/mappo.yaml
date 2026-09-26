@@ -21,6 +21,7 @@ advantage:
   gamma: 0.99  # 可选；折扣因子，范围 [0,1]。
   lambda: 0.95  # 可选；GAE 递推系数，范围 [0,1]。
   normalize: true  # 可选；是否对 advantage 做 batch 标准化；return 不变。
+  normalization_scope: per_agent  # 可选；per_agent 保留个体奖励尺度，global 复现旧行为。
 
 rollout:
   horizon: null  # 可选；null 使用环境 horizon，否则 1 <= horizon <= 环境 horizon。
