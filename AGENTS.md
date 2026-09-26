@@ -216,6 +216,12 @@ registry/recipes 只负责选择和装配，不反向依赖具体论文环境。
 检查 Python recipe 与 YAML recipe 在同一 `EnvironmentSpec` 下编译出等价组件。
 环境尺寸不能出现在 component options 中。
 
+每个算法使用一份完整的 `examples/configs/algorithms/<algorithm>.yaml`；`algorithm`
+字段只用于类型校验，不能通过仅修改该字符串切换算法。环境动力学和动作编码使用独立的
+`examples/configs/environments/<environment>.yaml`。seed、device、并行环境数量和输出
+路径属于实验运行参数，不进入算法或环境 recipe。新增或修改 YAML 时同步更新
+`examples/configs/README.md` 中的全部可选字段、默认值和约束。
+
 ### 新增具体算法
 
 只有新算法具有不能由当前组件表达的特有前向/损失语义时才增加算法类：

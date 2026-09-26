@@ -180,9 +180,11 @@ class NewPaperAdapter(EnvironmentAdapter):
 
 ### 情况一：只需要新 recipe
 
-如果需要的组件都已存在，复制并修改
-[`examples/configs/mappo.yaml`](examples/configs/mappo.yaml)，不要复制算法源文件。
-YAML 使用 `yaml.safe_load`，只能填写显式注册名称，且 schema 当前为版本 1。
+如果需要的组件都已存在，复制并修改对应的独立算法文件，例如
+[`examples/configs/algorithms/mappo.yaml`](examples/configs/algorithms/mappo.yaml)，
+不要复制算法源文件。`algorithm` 是 recipe 类型校验标签，不是可以单独切换算法的开关；
+切换算法应选择另一份完整 YAML。全部字段、可选项和默认值见
+[`examples/configs/README.md`](examples/configs/README.md)。
 
 ### 情况二：需要新组件
 
@@ -246,7 +248,7 @@ adapter.spec -> EnvironmentSpec -> compile_recipe -> Algorithm.from_recipe
 `EnvironmentAdapter` 子类，实现 `spec`、`reset` 和 `step`，即可复用现有算法类和
 训练设施。离策略入口可继续使用 `transitions_to_batch()` 或 `TensorReplayBuffer`；
 MAPPO 由 `OnPolicyTrainer` 直接采集 fresh rollout。如果新环境的动作类型与某个算法
-不匹配，recipe 编译器或旧配置工厂会直接报错。
+不匹配，recipe 编译器会直接报错。
 固定智能体数量、同构观测和动作是目前算法的前提；突破这些前提需要扩展模型能力。
 
 论文式 P2P 电能交易环境位于 [`marl/envs/energy_trading.py`](marl/envs/energy_trading.py)，
@@ -265,14 +267,17 @@ MAPPO 由 `OnPolicyTrainer` 直接采集 fresh rollout。如果新环境的动�
 运行一个真实的环境交互与参数更新示例：
 
 ```powershell
-.\.venv\Scripts\python.exe examples\train_energy_maac.py --episodes 5 --agents 3 --num-envs 16 --device auto
+.\.venv\Scripts\python.exe examples\train_energy_maac.py --episodes 5 --num-envs 16 --device auto
 ```
 
 示例使用合成曲线、ε-greedy 探索、批量环境推理和预分配 Tensor replay buffer，
-并打印各家庭平均回报。设备由 `--device auto|cpu|cuda` 选择；使用 NVIDIA GPU 前，
+并打印各家庭平均回报。默认分别读取
+`examples/configs/algorithms/maac.yaml` 和
+`examples/configs/environments/energy_trading.yaml`；可通过 `--recipe` 与
+`--environment` 分别替换。设备由 `--device auto|cpu|cuda` 选择；使用 NVIDIA GPU 前，
 需按 [PyTorch 官方安装说明](https://docs.pytorch.org/get-started/locally/) 在本项目
-虚拟环境安装 CUDA 版 PyTorch。`--amp bf16` 可在支持
-BF16 的 CUDA 设备上开启混合精度；默认保持 FP32。通用执行组件位于
+虚拟环境安装 CUDA 版 PyTorch。离策略算法在自己的 YAML 中将 `amp_dtype` 设为
+`bf16`，可在支持 BF16 的 CUDA 设备上开启混合精度；`null` 表示 FP32。通用执行组件位于
 `marl/runtime.py`，负责设备选择、并行适配器和离策略经验存储。MAPPO 的采样、GAE、
 mini-batch 与多 epoch 更新由 `OnPolicyTrainer` 和 `PPOUpdatePlan` 负责；其他四个算法
 由 `OffPolicyTrainer` 和 `OffPolicyUpdatePlan` 管理 replay、优化器、梯度裁剪、
@@ -345,6 +350,8 @@ Python 中也可以使用 `default_mappo_recipe()`，或者通过 `register_poli
 只有出现新的数学机制时才新增组件，不复制完整算法类。YAML 不能填写 Python 导入路径，
 环境尺寸始终由 `EnvironmentSpec` 注入。
 
-MAAC、MADDPG、MASAC、QMIX 的默认 YAML recipe 位于 `examples/configs/`，其 Python
-入口分别为 `default_maac_recipe()`、`default_maddpg_recipe()`、
-`default_masac_recipe()` 和 `default_qmix_recipe()`。
+五个算法各自拥有一份完整 YAML recipe，位于 `examples/configs/algorithms/`；环境配置
+独立位于 `examples/configs/environments/`。算法 YAML 不包含智能体数、观测维度、动作
+维度或环境物理参数。MAAC、MADDPG、MASAC、QMIX 的 Python 入口分别为
+`default_maac_recipe()`、`default_maddpg_recipe()`、`default_masac_recipe()` 和
+`default_qmix_recipe()`。

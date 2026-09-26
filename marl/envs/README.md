@@ -49,6 +49,12 @@ adapter = EnergyTradingAdapter(environment, ActionKind.DISCRETE)
 本实现没有加密通信或隐私保护协议；集中训练的 global state 会包含各家庭观测。
 当前示例适合少量家庭的接口验证，不代表已具备论文 300 户的计算扩展性。
 
+可运行示例把环境参数独立保存在
+[`examples/configs/environments/energy_trading.yaml`](../../examples/configs/environments/energy_trading.yaml)。
+该文件显式列出 `EnergyTradingConfig` 的全部可选字段；加载时使用 `yaml.safe_load`，
+未知顶层字段和未知环境 option 都会立即报错。算法网络、loss、optimizer 和 replay 参数
+必须放在独立的算法 YAML 中，不能混入环境文件。
+
 ## 适配器边界
 
 `EnvironmentStep` 统一返回：
