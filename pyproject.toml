@@ -22,6 +22,10 @@ dev = [
     "ruff>=0.8,<1.0",
     "mypy>=1.13,<2.0",
 ]
+benchmark = [
+    "mpe2>=1.1,<2.0",
+    "matplotlib>=3.9,<4.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["marl*"]
@@ -41,4 +45,3 @@ select = ["E", "F", "I", "UP", "B"]
 python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
-

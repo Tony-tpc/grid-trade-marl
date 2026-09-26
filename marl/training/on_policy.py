@@ -293,7 +293,7 @@ class PPOUpdatePlan:
         batch = experience.batch
         averages["explained_variance"] = self._explained_variance(
             batch.extras["old_values"], batch.extras["returns"]
-        )
+        ).to(device)
         names = tuple(averages)
         values = torch.stack([averages[name].reshape(()) for name in names]).cpu().tolist()
         return dict(zip(names, values, strict=True))

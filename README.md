@@ -13,6 +13,8 @@
 
 ## 快速运行
 
+非合作博弈基准使用 Farama MPE2 的 `simple_adversary`，详见后文。
+
 在仓库根目录使用项目虚拟环境：
 
 ```powershell
@@ -20,11 +22,22 @@
 .\.venv\Scripts\python.exe examples\train_energy_maac.py --episodes 1 --num-envs 8 --device cpu
 .\.venv\Scripts\python.exe examples\minimal_usage.py
 .\.venv\Scripts\python.exe examples\custom_component.py
+.\.venv\Scripts\python.exe -m pip install -e ".[benchmark]"
+.\.venv\Scripts\python.exe benchmarks\benchmark_noncooperative.py --device auto
 ```
+
+完整的三随机种子对比和五张性能图命令见
+[`benchmarks/README.md`](benchmarks/README.md)。生成的 JSON 和 PNG 均写入
+git 忽略的 `benchmark-results/`。
 
 算法配置使用 `--config`，环境配置使用 `--environment`。两份 YAML 独立：
 [算法与环境全部字段](examples/configs/README.md)。
 能源示例使用合成数据，验证训练链路；论文实验还需要真实数据、baseline 和多 seed 评估。
+非合作基准使用 Farama MPE2 的
+[simple_adversary_v3](https://mpe2.farama.org/environments/simple_adversary/)：
+MAAC/MAPPO 使用离散动作，MADDPG/MASAC 使用连续动作。QMIX 只支持共享团队奖励，
+因此报告会把它记为 expected_incompatible，而不会错误地平均对抗双方奖励。
+详细判定口径见 [基准说明](benchmarks/README.md)。
 
 ```python
 from marl.algorithms import MAPPOConfig

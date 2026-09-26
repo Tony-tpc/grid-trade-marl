@@ -9,3 +9,4 @@ __pycache__/
 .env.*
 checkpoints/
 runs/
+benchmark-results/

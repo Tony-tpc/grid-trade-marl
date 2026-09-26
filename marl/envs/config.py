@@ -17,6 +17,11 @@ import yaml  # type: ignore[import-untyped]
 from marl.envs.base import ActionKind
 from marl.envs.energy_trading import EnergyProfiles, EnergyTradingConfig, EnergyTradingEnv
 from marl.envs.energy_trading_adapter import EnergyTradingAdapter
+from marl.envs.mpe2_simple_adversary_adapter import (
+    MPE2SimpleAdversaryAdapter,
+    MPE2SimpleAdversaryConfig,
+    build_mpe2_simple_adversary,
+)
 
 EnvironmentScalar: TypeAlias = str | int | float | bool | None
 EnvironmentValue: TypeAlias = (
@@ -145,3 +150,32 @@ def build_energy_trading_adapter(
         EnergyTradingEnv(settings, profiles),
         config.action_kind,
     )
+
+
+_MPE2_SIMPLE_ADVERSARY_FIELDS = frozenset(
+    item.name for item in fields(MPE2SimpleAdversaryConfig)
+)
+
+
+def mpe2_simple_adversary_config_from_environment(
+    config: EnvironmentConfig,
+) -> MPE2SimpleAdversaryConfig:
+    """严格绑定 Farama MPE2 simple_adversary 的场景参数。"""
+
+    if config.environment != "mpe2_simple_adversary":
+        raise ValueError(
+            "该构造函数只接受 environment='mpe2_simple_adversary'"
+        )
+    unknown = set(config.options) - _MPE2_SIMPLE_ADVERSARY_FIELDS
+    if unknown:
+        raise ValueError(f"MPE2 simple_adversary options 含未知字段：{sorted(unknown)}")
+    return MPE2SimpleAdversaryConfig(**dict(config.options))  # type: ignore[arg-type]
+
+
+def build_mpe2_simple_adversary_adapter(
+    config: EnvironmentConfig,
+) -> MPE2SimpleAdversaryAdapter:
+    """根据独立环境 YAML 创建 MPE2 对抗场景适配器。"""
+
+    settings = mpe2_simple_adversary_config_from_environment(config)
+    return build_mpe2_simple_adversary(settings, action_kind=config.action_kind)

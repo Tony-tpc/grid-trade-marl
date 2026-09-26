@@ -1,7 +1,8 @@
 # 配置参考
 
 每个算法一份 YAML：`algorithms/{mappo,maac,maddpg,masac,qmix}.yaml`。
-环境独立保存在 `environments/energy_trading.yaml`。
+环境独立保存在 `environments/energy_trading.yaml` 或
+`environments/mpe2_simple_adversary.yaml`。
 seed、device、并行环境数和输出路径由脚本/命令行管理。
 
 ## 公共规则
@@ -91,3 +92,7 @@ YAML 可使用 gae_lambda 代替 lambda，但不能同时填写两者。
 算法配置当前没有分组/group 元组；不会把环境配置里的列表解释成算法组。
 `action_kind` 为 discrete 时使用 54 项动作目录，为 continuous 时使用长度 4 的动作向量。
 能源环境输出 individual reward，因此不能直接与 QMIX 配对。
+
+MPE2 simple_adversary 配置支持 `num_good_agents`、`horizon` 和
+`dynamic_rescaling`。它同样输出 individual reward；将 `action_kind` 设为
+`discrete` 可用于 MAAC/MAPPO，设为 `continuous` 可用于 MADDPG/MASAC。

@@ -1,0 +1,10 @@
+schema_version: 1
+environment: mpe2_simple_adversary
+action_kind: discrete
+
+# Farama MPE2 simple_adversary_v3 的场景参数。
+# continuous 版本只需把 action_kind 改为 continuous。
+options:
+  num_good_agents: 2
+  horizon: 25
+  dynamic_rescaling: false

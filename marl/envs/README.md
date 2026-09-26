@@ -106,3 +106,15 @@ class NewPaperAdapter(EnvironmentAdapter):
 
 环境 YAML 使用 `load_environment_config()` 读取，由 `build_energy_trading_adapter()` 构造。
 算法和 trainer 使用 `build_experiment(adapter, algorithm_config)` 一次装配。
+
+## Farama MPE2 非合作测试环境
+
+`MPE2SimpleAdversaryAdapter` 接入官方
+`simple_adversary_v3` Parallel API。场景含一个 adversary 与多个 good agents，
+双方目标冲突并保留逐智能体奖励；同一场景可切换离散或连续动作。
+
+官方环境的局部观测是异构的：默认 adversary 为 8 维，good agent 为 10 维。
+当前同构网络要求统一 `O`，因此适配器只在右侧补零到 10 维，并通过
+`info["observation_dims"]` 保留原始长度。连续策略输出的 `[-1,1]` 会在环境
+边界线性映射到 MPE2 的 `[0,1]` 动作空间。场景的时间上限写入 `truncated`，
+不会伪装成 true termination。
