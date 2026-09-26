@@ -1,0 +1,47 @@
+# 独立环境 recipe：只描述环境动力学和动作编码，不包含算法、optimizer 或网络参数。
+schema_version: 1  # 必填；环境 recipe 格式版本。
+environment: energy_trading  # 必填；环境实现的稳定注册名称。
+action_kind: discrete  # 必填；discrete 使用 54 项动作目录，continuous 使用长度 4 的向量。
+
+# options 可为空；下面列出 EnergyTradingConfig 的全部可选字段及当前默认值。
+options:
+  num_agents: 3  # 智能体/家庭数，必须 >= 1。
+  horizon: 48  # 每个 episode 的交易时段数，必须 >= 2。
+  history_steps: 48  # 每个局部观测包含的历史窗口长度，必须 >= 1。
+  time_step_hours: 0.5  # 每个时段的小时数，必须 > 0。
+
+  grid_limit_kw: 8.0  # 单户并网功率软约束阈值。
+  peak_penalty: 100.0  # 超过 grid_limit_kw 后的峰值惩罚权重。
+  comfort_penalty: 5.0  # 室温超出舒适区间的惩罚权重。
+  ev_departure_penalty: 5.0  # EV 离家时电量不足的惩罚权重。
+
+  comfort_min_c: 20.0  # 舒适温度下界（摄氏度）。
+  comfort_max_c: 25.0  # 舒适温度上界（摄氏度）。
+  initial_indoor_c: 23.0  # episode 开始时的室内温度。
+  hvac_max_kw: 2.0  # HVAC 最大功率。
+  hvac_thermal_capacity: 4.0  # 建筑等效热容。
+  hvac_thermal_resistance: 3.0  # 建筑等效热阻。
+  hvac_cooling_efficiency: 2.5  # HVAC 制冷效率。
+
+  ev_capacity_kwh: 12.0  # EV 电池容量。
+  ev_initial_kwh: 6.0  # EV 初始电量，必须位于 [0, capacity]。
+  ev_max_kw: 3.0  # EV 最大充放电功率。
+  ev_efficiency: 0.9  # EV 充放电效率，范围 (0, 1]。
+  ev_departure_step: 16  # EV 离家时段索引。
+  ev_arrival_step: 34  # EV 归家时段索引，必须晚于 departure。
+  ev_trip_kwh: 4.0  # 一次出行消耗的电量。
+
+  storage_capacity_kwh: 8.0  # 家庭储能容量。
+  storage_initial_kwh: 4.0  # 储能初始电量。
+  storage_max_kw: 2.0  # 储能最大充放电功率。
+  storage_efficiency: 0.9  # 储能充放电效率，范围 (0, 1]。
+
+  sa_earliest_step: 8  # 智能电器允许启动的最早时段。
+  sa_latest_start_step: 39  # 最晚启动时段，启动后必须能在 horizon 内完成。
+  sa_cycle_kw: [1.5, 1.0]  # 智能电器不可中断工作周期的逐时段功率。
+
+  # 以下四项为可选逐家庭设备所有权。null 表示所有家庭都有；列表长度必须等于 num_agents。
+  has_ev: null
+  has_storage: null
+  has_hvac: null
+  has_sa: null

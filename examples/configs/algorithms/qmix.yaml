@@ -1,0 +1,41 @@
+# QMIX 完整算法 recipe；仅适用于离散动作和共享团队奖励。
+schema_version: 1
+algorithm: qmix
+
+policy:
+  type: shared_discrete_q  # 所有同构智能体共享局部 Q 网络。
+  options:
+    hidden_dim: 128  # 可选，默认 128；局部 Q 网络隐藏维度。
+
+critic:
+  type: qmix_mixer  # 使用全局 state 将 agent Q 单调混合为 Q_tot。
+  options:
+    mixing_dim: 32  # 可选，默认 32；hypernetwork/mixer 隐藏维度。
+
+objectives:
+  - type: td_mse
+    options:
+      coefficient: 1.0  # 可选，默认 1.0；Q_tot TD loss 权重。
+
+returns:
+  type: td0
+  options:
+    gamma: 0.99  # 可选，默认 0.99。
+
+experience:
+  type: replay
+  options:
+    capacity: 100000  # 可选，默认 100000。
+    batch_size: 256  # 可选，默认 256。
+
+update:
+  type: off_policy_update
+  options:
+    learning_rate: 0.0003  # 可选，默认 0.0003。
+    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭。
+    amp_dtype: null  # 可选，默认 null；可设 bf16。
+
+target_update:
+  type: soft
+  options:
+    tau: 0.005  # 可选，默认 0.005；也可改用 hard + interval。

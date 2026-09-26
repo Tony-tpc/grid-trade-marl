@@ -1,0 +1,47 @@
+# MAAC 完整算法 recipe；离散动作、个体奖励、off-policy replay。
+schema_version: 1  # 必填；recipe 格式版本。
+algorithm: maac  # 必填；必须与 MAAC.from_recipe() 一致。
+
+policy:
+  type: independent_discrete  # 每个智能体独立的离散 MLP Actor。
+  options:
+    hidden_dim: 128  # 可选，默认 128；Actor 隐藏维度。
+
+critic:
+  type: attention_q  # 对其他智能体观测/动作做注意力聚合的集中式 Critic。
+  options:
+    hidden_dim: 128  # 可选，默认 128；注意力表示和 Q head 隐藏维度。
+    attention_heads: 4  # 可选，默认 4；必须整除 hidden_dim。
+
+objectives:
+  - type: td_mse  # 一步 TD target 的 critic MSE。
+    options:
+      coefficient: 1.0  # 可选，默认 1.0；critic loss 权重。
+  - type: counterfactual  # MAAC 离散反事实 baseline policy objective。
+    options: {}  # 没有可选字段。
+  - type: entropy  # 探索熵奖励。
+    options:
+      coefficient: 0.01  # 可选，默认 0.01；entropy bonus 权重。
+
+returns:
+  type: td0  # true termination 阻止 bootstrap，truncation 保留 bootstrap。
+  options:
+    gamma: 0.99  # 可选，默认 0.99；一步 TD 折扣因子。
+
+experience:
+  type: replay
+  options:
+    capacity: 100000  # 可选，默认 100000；ring buffer 最大 transition 数。
+    batch_size: 256  # 可选，默认 256；每次更新采样量，不得大于 capacity。
+
+update:
+  type: off_policy_update
+  options:
+    learning_rate: 0.0003  # 可选，默认 0.0003；Adam 学习率。
+    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭梯度裁剪。
+    amp_dtype: null  # 可选，默认 null；可设 bf16，仅支持相应 CUDA 设备。
+
+target_update:
+  type: soft
+  options:
+    tau: 0.005  # 可选，默认 0.005；每次更新后的 Polyak 系数，范围 (0, 1]。

@@ -8,74 +8,59 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from pathlib import Path
 from typing import cast
 
 import numpy as np
 import torch
 
-from marl.algorithms import MAAC, default_maac_recipe
+from marl.algorithms import MAAC
 from marl.envs import (
-    ActionKind,
-    EnergyTradingAdapter,
-    EnergyTradingConfig,
-    EnergyTradingEnv,
     Transition,
+    build_energy_trading_adapter,
+    load_environment_recipe,
 )
-from marl.recipes import ComponentRecipe
+from marl.recipes import load_algorithm_recipe
 from marl.runtime import SyncVectorEnv, resolve_device
 from marl.training import OffPolicyTrainer
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="个体收益电能交易博弈中的 MAAC 训练示例")
+    parser.add_argument(
+        "--recipe",
+        type=Path,
+        default=Path(__file__).parent / "configs" / "algorithms" / "maac.yaml",
+    )
+    parser.add_argument(
+        "--environment",
+        type=Path,
+        default=(
+            Path(__file__).parent
+            / "configs"
+            / "environments"
+            / "energy_trading.yaml"
+        ),
+    )
     parser.add_argument("--episodes", type=int, default=5)
-    parser.add_argument("--agents", type=int, default=3)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
-    parser.add_argument("--amp", choices=("none", "bf16"), default="none")
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    if min(args.episodes, args.agents, args.batch_size, args.num_envs, args.hidden_dim) < 1:
-        parser.error("episodes、agents、batch-size、num-envs、hidden-dim 必须大于零")
-    if args.hidden_dim % 4:
-        parser.error("hidden-dim 必须能被 MAAC 的 4 个 attention heads 整除")
+    if min(args.episodes, args.num_envs) < 1:
+        parser.error("episodes 和 num-envs 必须大于零")
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
+    environment_recipe = load_environment_recipe(args.environment)
     vector_env = SyncVectorEnv(
         [
-            EnergyTradingAdapter(
-                EnergyTradingEnv(EnergyTradingConfig(num_agents=args.agents)),
-                ActionKind.DISCRETE,
-            )
+            build_energy_trading_adapter(environment_recipe)
             for _ in range(args.num_envs)
         ]
     )
     device = resolve_device(args.device)
-    recipe = replace(
-        default_maac_recipe(),
-        policy=ComponentRecipe(
-            "independent_discrete", {"hidden_dim": args.hidden_dim}
-        ),
-        critic=ComponentRecipe(
-            "attention_q",
-            {"hidden_dim": args.hidden_dim, "attention_heads": 4},
-        ),
-        experience=ComponentRecipe(
-            "replay", {"capacity": 5000, "batch_size": args.batch_size}
-        ),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {
-                "learning_rate": 3e-4,
-                "max_grad_norm": 10.0,
-                "amp_dtype": "bf16" if args.amp == "bf16" else None,
-            },
-        ),
-    )
+    recipe = load_algorithm_recipe(args.recipe)
     algorithm = MAAC.from_recipe(vector_env.spec, recipe).to(device)
     trainer = OffPolicyTrainer.from_recipe(
         vector_env.spec,
@@ -84,7 +69,7 @@ def main() -> None:
         device=device,
         rng=rng,
     )
-    print(f"device={device} amp={args.amp} num_envs={args.num_envs}")
+    print(f"device={device} num_envs={args.num_envs}")
 
     for episode in range(args.episodes):
         current = vector_env.reset(

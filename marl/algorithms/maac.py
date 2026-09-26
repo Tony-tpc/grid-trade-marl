@@ -35,7 +35,7 @@ def default_maac_recipe() -> AlgorithmRecipe:
             "attention_q", {"hidden_dim": 128, "attention_heads": 4}
         ),
         objectives=(
-            ComponentRecipe("td_mse", {}),
+            ComponentRecipe("td_mse", {"coefficient": 1.0}),
             ComponentRecipe("counterfactual", {}),
             ComponentRecipe("entropy", {"coefficient": 0.01}),
         ),
@@ -43,7 +43,7 @@ def default_maac_recipe() -> AlgorithmRecipe:
         experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
         update=ComponentRecipe(
             "off_policy_update",
-            {"learning_rate": 3e-4, "max_grad_norm": 10.0},
+            {"learning_rate": 3e-4, "max_grad_norm": 10.0, "amp_dtype": None},
         ),
         target_update=ComponentRecipe("soft", {"tau": 0.005}),
     )

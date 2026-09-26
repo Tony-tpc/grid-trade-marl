@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 
 from marl.algorithms import MAPPO
-from marl.envs import ActionKind, EnergyTradingAdapter, EnergyTradingConfig, EnergyTradingEnv
+from marl.envs import build_energy_trading_adapter, load_environment_recipe
 from marl.recipes import load_algorithm_recipe
 from marl.runtime import SyncVectorEnv, resolve_device
 from marl.training import OnPolicyTrainer
@@ -22,24 +22,31 @@ def main() -> None:
     parser.add_argument(
         "--recipe",
         type=Path,
-        default=Path(__file__).parent / "configs" / "mappo.yaml",
+        default=Path(__file__).parent / "configs" / "algorithms" / "mappo.yaml",
+    )
+    parser.add_argument(
+        "--environment",
+        type=Path,
+        default=(
+            Path(__file__).parent
+            / "configs"
+            / "environments"
+            / "energy_trading.yaml"
+        ),
     )
     parser.add_argument("--rounds", type=int, default=2)
-    parser.add_argument("--agents", type=int, default=3)
     parser.add_argument("--num-envs", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     args = parser.parse_args()
-    if min(args.rounds, args.agents, args.num_envs) < 1:
-        parser.error("rounds、agents 和 num-envs 必须大于 0")
+    if min(args.rounds, args.num_envs) < 1:
+        parser.error("rounds 和 num-envs 必须大于 0")
 
     torch.manual_seed(args.seed)
+    environment_recipe = load_environment_recipe(args.environment)
     environment = SyncVectorEnv(
         [
-            EnergyTradingAdapter(
-                EnergyTradingEnv(EnergyTradingConfig(num_agents=args.agents)),
-                ActionKind.DISCRETE,
-            )
+            build_energy_trading_adapter(environment_recipe)
             for _ in range(args.num_envs)
         ]
     )

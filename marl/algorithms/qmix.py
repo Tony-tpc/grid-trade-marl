@@ -26,12 +26,12 @@ def default_qmix_recipe() -> AlgorithmRecipe:
         algorithm="qmix",
         policy=ComponentRecipe("shared_discrete_q", {"hidden_dim": 128}),
         critic=ComponentRecipe("qmix_mixer", {"mixing_dim": 32}),
-        objectives=(ComponentRecipe("td_mse", {}),),
+        objectives=(ComponentRecipe("td_mse", {"coefficient": 1.0}),),
         returns=ComponentRecipe("td0", {"gamma": 0.99}),
         experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
         update=ComponentRecipe(
             "off_policy_update",
-            {"learning_rate": 3e-4, "max_grad_norm": 10.0},
+            {"learning_rate": 3e-4, "max_grad_norm": 10.0, "amp_dtype": None},
         ),
         target_update=ComponentRecipe("soft", {"tau": 0.005}),
     )

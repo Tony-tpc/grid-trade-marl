@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import fields
 from pathlib import Path
 from typing import cast
 
@@ -12,7 +13,16 @@ from marl.algorithms import (
     default_masac_recipe,
     default_qmix_recipe,
 )
-from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.envs import (
+    ActionKind,
+    EnergyTradingConfig,
+    EnvironmentSpec,
+    RewardStructure,
+    build_energy_trading_adapter,
+    energy_trading_config_from_recipe,
+    environment_recipe_from_dict,
+    load_environment_recipe,
+)
 from marl.recipes import (
     AlgorithmRecipe,
     ComponentRecipe,
@@ -103,8 +113,90 @@ def test_off_policy_python_and_yaml_defaults_are_equal(
     name: str, factory: object
 ) -> None:
     assert callable(factory)
-    path = Path(__file__).parents[1] / "examples" / "configs" / f"{name}.yaml"
+    path = (
+        Path(__file__).parents[1]
+        / "examples"
+        / "configs"
+        / "algorithms"
+        / f"{name}.yaml"
+    )
     assert load_algorithm_recipe(path) == factory()
+
+
+def test_environment_yaml_is_independent_and_builds_adapter() -> None:
+    path = (
+        Path(__file__).parents[1]
+        / "examples"
+        / "configs"
+        / "environments"
+        / "energy_trading.yaml"
+    )
+    selected = load_environment_recipe(path)
+    config = energy_trading_config_from_recipe(selected)
+    adapter = build_energy_trading_adapter(selected)
+
+    assert selected.environment == "energy_trading"
+    assert selected.action_kind == ActionKind.DISCRETE
+    assert config.num_agents == 3
+    assert config.sa_cycle_kw == (1.5, 1.0)
+    assert adapter.spec.num_agents == config.num_agents
+    assert adapter.spec.horizon == config.horizon
+    assert adapter.spec.action_kind == ActionKind.DISCRETE
+    assert set(selected.options) == {
+        item.name for item in fields(EnergyTradingConfig)
+    }
+
+
+def test_environment_recipe_rejects_unknown_fields_and_options() -> None:
+    base: dict[str, object] = {
+        "schema_version": 1,
+        "environment": "energy_trading",
+        "action_kind": "discrete",
+        "options": {},
+    }
+    with pytest.raises(ValueError, match="未知字段"):
+        environment_recipe_from_dict({**base, "algorithm": "mappo"})
+
+    selected = environment_recipe_from_dict(
+        {**base, "options": {"learning_rate": 0.001}}
+    )
+    with pytest.raises(ValueError, match="未知字段"):
+        energy_trading_config_from_recipe(selected)
+
+
+@pytest.mark.parametrize(
+    ("name", "action_kind", "reward_structure"),
+    (
+        ("mappo", ActionKind.DISCRETE, RewardStructure.INDIVIDUAL),
+        ("maac", ActionKind.DISCRETE, RewardStructure.INDIVIDUAL),
+        ("maddpg", ActionKind.CONTINUOUS, RewardStructure.INDIVIDUAL),
+        ("masac", ActionKind.CONTINUOUS, RewardStructure.INDIVIDUAL),
+        ("qmix", ActionKind.DISCRETE, RewardStructure.SHARED),
+    ),
+)
+def test_every_algorithm_yaml_builds_all_documented_options(
+    name: str,
+    action_kind: ActionKind,
+    reward_structure: RewardStructure,
+) -> None:
+    path = (
+        Path(__file__).parents[1]
+        / "examples"
+        / "configs"
+        / "algorithms"
+        / f"{name}.yaml"
+    )
+    selected = load_algorithm_recipe(path)
+    spec = EnvironmentSpec(
+        num_agents=2,
+        observation_dim=3,
+        action_dim=4,
+        state_dim=6,
+        action_kind=action_kind,
+        horizon=48,
+        reward_structure=reward_structure,
+    )
+    assert compile_recipe(selected, spec).recipe.algorithm == name
 
 
 def test_recipe_rejects_unknown_and_missing_fields() -> None:

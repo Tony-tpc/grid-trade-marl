@@ -1,0 +1,45 @@
+# MASAC 完整算法 recipe；连续随机动作、twin-Q、自动温度和 off-policy replay。
+schema_version: 1
+algorithm: masac
+
+policy:
+  type: independent_gaussian  # 每个智能体独立的 tanh-Gaussian Actor。
+  options:
+    hidden_dim: 128  # 可选，默认 128；Actor 隐藏维度。
+
+critic:
+  type: twin_independent_centralized_q  # 两组逐智能体集中式 Q，用较小值抑制过估计。
+  options:
+    hidden_dim: 128  # 可选，默认 128；每个 Q 网络隐藏维度。
+
+objectives:
+  - type: td_mse
+    options:
+      coefficient: 1.0  # 可选，默认 1.0；critic loss 权重。
+  - type: sac_entropy  # SAC actor objective 与可训练温度 alpha。
+    options:
+      initial_alpha: 0.2  # 可选，默认 0.2；初始 entropy temperature，必须 > 0。
+      target_entropy: null  # 可选，默认 null；null 表示使用 -action_dim。
+
+returns:
+  type: td0
+  options:
+    gamma: 0.99  # 可选，默认 0.99。
+
+experience:
+  type: replay
+  options:
+    capacity: 100000  # 可选，默认 100000。
+    batch_size: 256  # 可选，默认 256。
+
+update:
+  type: off_policy_update
+  options:
+    learning_rate: 0.0003  # 可选，默认 0.0003。
+    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭。
+    amp_dtype: null  # 可选，默认 null；可设 bf16。
+
+target_update:
+  type: soft
+  options:
+    tau: 0.005  # 可选，默认 0.005；范围 (0, 1]。
