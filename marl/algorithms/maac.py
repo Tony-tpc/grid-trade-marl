@@ -170,7 +170,11 @@ class MAAC(BaseMARLAlgorithm):
             raise IndexError("agent_index 超出智能体范围")
         assert batch.actions is not None
         with torch.no_grad():
-            q_all = self.critic(batch.observations, batch.actions)
+            current_actions = self.policy.act(
+                batch.observations,
+                action_mask=batch.action_mask,
+            ).actions
+            q_all = self.critic(batch.observations, current_actions)
         logits = self.policy.logits(batch.observations, batch.action_mask)
         selected_logits = logits[..., agent_index, :]
         selected_q = q_all[..., agent_index, :]

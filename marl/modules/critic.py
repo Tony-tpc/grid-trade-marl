@@ -127,7 +127,13 @@ class TwinIndependentCentralizedCritics(nn.Module):
 
 
 class AttentionCritic(nn.Module):
-    """共享注意力上下文和逐智能体离散候选 Q。"""
+    """MAAC 的逐智能体离散候选 Q 网络。
+
+    每个智能体拥有独立的 observation encoder、state-action encoder 与 Q head；
+    只有 ``nn.MultiheadAttention`` 内的 query/key/value 投影在智能体间共享。
+    输入为 observations ``[*B,N,O]`` 与离散 actions ``[*B,N]``，输出为
+    每个智能体所有候选动作的 Q 值 ``[*B,N,A]``。
+    """
 
     def __init__(
         self,
@@ -140,41 +146,84 @@ class AttentionCritic(nn.Module):
         super().__init__()
         if hidden_dim % attention_heads:
             raise ValueError("hidden_dim 必须能被 attention_heads 整除")
+        self.num_agents = num_agents
+        self.observation_dim = observation_dim
         self.action_dim = action_dim
-        self.own_projection = nn.Linear(observation_dim, hidden_dim)
-        self.other_projection = nn.Linear(observation_dim + action_dim, hidden_dim)
+        self.hidden_dim = hidden_dim
+        self.own_encoders = nn.ModuleList(
+            nn.Sequential(nn.Linear(observation_dim, hidden_dim), nn.ReLU())
+            for _ in range(num_agents)
+        )
+        self.state_action_encoders = nn.ModuleList(
+            nn.Sequential(
+                nn.Linear(observation_dim + action_dim, hidden_dim),
+                nn.ReLU(),
+            )
+            for _ in range(num_agents)
+        )
         self.attention = nn.MultiheadAttention(hidden_dim, attention_heads, batch_first=True)
         self.register_buffer(
             "_self_attention_mask",
             torch.eye(num_agents, dtype=torch.bool),
             persistent=False,
         )
-        self.q_head = nn.Sequential(
-            nn.Linear(2 * hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, action_dim),
+        self.q_heads = nn.ModuleList(
+            nn.Sequential(
+                nn.Linear(2 * hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, action_dim),
+            )
+            for _ in range(num_agents)
         )
 
     def forward(self, observations: Tensor, actions: Tensor) -> Tensor:
-        leading, agents = observations.shape[:-2], observations.shape[-2]
-        own = self.own_projection(observations).reshape(
-            -1, agents, self.own_projection.out_features
+        expected_observation_shape = (self.num_agents, self.observation_dim)
+        if observations.shape[-2:] != expected_observation_shape:
+            raise ValueError(
+                "observations 末两维应为 "
+                f"{expected_observation_shape}，实际为 {tuple(observations.shape[-2:])}"
+            )
+        if actions.shape != observations.shape[:-1]:
+            raise ValueError("离散 actions 应为 [...,N] 且前置维与 observations 一致")
+        leading = observations.shape[:-2]
+        own = torch.stack(
+            [
+                encoder(observations[..., index, :])
+                for index, encoder in enumerate(self.own_encoders)
+            ],
+            dim=-2,
         )
         one_hot = F.one_hot(actions.long(), self.action_dim).to(observations.dtype)
-        others = self.other_projection(torch.cat((observations, one_hot), dim=-1))
-        others = others.reshape(-1, agents, others.shape[-1])
-        if agents == 1:
+        state_actions = torch.cat((observations, one_hot), dim=-1)
+        others = torch.stack(
+            [
+                encoder(state_actions[..., index, :])
+                for index, encoder in enumerate(self.state_action_encoders)
+            ],
+            dim=-2,
+        )
+        flat_own = own.reshape(-1, self.num_agents, self.hidden_dim)
+        flat_others = others.reshape(-1, self.num_agents, self.hidden_dim)
+        if self.num_agents == 1:
             context = torch.zeros_like(own)
         else:
             context, _ = self.attention(
-                own,
-                others,
-                others,
+                flat_own,
+                flat_others,
+                flat_others,
                 attn_mask=self._self_attention_mask,
                 need_weights=False,
             )
-        q_values = self.q_head(torch.cat((own, context), dim=-1))
-        result: Tensor = q_values.reshape(*leading, agents, self.action_dim)
+            context = context.reshape(*leading, self.num_agents, self.hidden_dim)
+        q_input = torch.cat((own, context), dim=-1)
+        q_values = torch.stack(
+            [
+                head(q_input[..., index, :])
+                for index, head in enumerate(self.q_heads)
+            ],
+            dim=-2,
+        )
+        result: Tensor = q_values.reshape(*leading, self.num_agents, self.action_dim)
         return result
 
 
