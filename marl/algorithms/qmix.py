@@ -12,13 +12,14 @@ from torch import Tensor, nn
 from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
-from marl.envs.base import EnvironmentSpec
-from marl.modules.mixer import QMixer, QMixerConfig
-from marl.modules.policy import SharedDiscreteQConfig, SharedDiscreteQPolicy
+from marl.envs.base import ActionKind, EnvironmentSpec, RewardStructure
+from marl.extensions import Buildable
+from marl.modules.mixer import MixingNetwork, QMixer, QMixerConfig
+from marl.modules.policy import LocalQPolicy, SharedDiscreteQConfig, SharedDiscreteQPolicy
 from marl.objectives import LossBundle, ObjectiveResult, TDLossObjective
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator
+from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
@@ -37,13 +38,26 @@ class QMIXConfig:
 
     schema_version: Literal[1] = 1
     algorithm: Literal["qmix"] = "qmix"
-    policy: SharedDiscreteQConfig = SharedDiscreteQConfig()
-    mixer: QMixerConfig = QMixerConfig()
+    policy: Buildable[LocalQPolicy] = SharedDiscreteQConfig()
+    mixer: Buildable[MixingNetwork] = QMixerConfig()
     loss: QMIXLossConfig = QMIXLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
     update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
+
+
+    def build(self, spec: EnvironmentSpec) -> QMIX:
+        """在此处直接查看 QMIX 的完整组件组合。"""
+        if spec.action_kind != ActionKind.DISCRETE:
+            raise ValueError("QMIX 不支持当前动作类型")
+        if spec.reward_structure != RewardStructure.SHARED:
+            raise ValueError("QMIX 要求共享团队奖励")
+        return QMIX(
+            spec, self.policy.build(spec), self.mixer.build(spec),
+            TDLossObjective(self.loss.td_coefficient),
+            self.value_target.build(),
+        )
 
 
 def default_qmix_recipe() -> AlgorithmRecipe:
@@ -67,17 +81,19 @@ class QMIX(BaseMARLAlgorithm):
     def __init__(
         self,
         spec: EnvironmentSpec,
-        policy: SharedDiscreteQPolicy,
-        mixer: QMixer,
+        policy: LocalQPolicy,
+        mixer: MixingNetwork,
         td_loss: TDLossObjective,
-        return_estimator: TD0Estimator,
-        compiled_recipe: CompiledRecipe,
+        return_estimator: ValueTargetEstimator,
+        compiled_recipe: CompiledRecipe | None = None,
     ) -> None:
         super().__init__(spec)
         self.policy = policy
         self.mixer = mixer
-        self.target_policy = deepcopy(policy).requires_grad_(False)
-        self.target_mixer = deepcopy(mixer).requires_grad_(False)
+        self.target_policy = deepcopy(policy)
+        self.get_submodule("target_policy").requires_grad_(False)
+        self.target_mixer = deepcopy(mixer)
+        self.get_submodule("target_mixer").requires_grad_(False)
         self.td_loss = td_loss
         self.return_estimator = return_estimator
         self.compiled_recipe = compiled_recipe
@@ -178,6 +194,6 @@ class QMIX(BaseMARLAlgorithm):
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (
-            (self.target_policy, self.policy),
-            (self.target_mixer, self.mixer),
+            (self.get_submodule("target_policy"), self.get_submodule("policy")),
+            (self.get_submodule("target_mixer"), self.get_submodule("mixer")),
         )

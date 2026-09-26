@@ -17,9 +17,14 @@ from torch import Tensor, nn
 from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
-from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import IndependentCentralizedCritics, IndependentQConfig
-from marl.modules.policy import IndependentDeterministicConfig, IndependentDeterministicPolicy
+from marl.envs.base import ActionKind, EnvironmentSpec
+from marl.extensions import Buildable
+from marl.modules.critic import IndependentCentralizedCritics, IndependentQConfig, QEnsemble
+from marl.modules.policy import (
+    IndependentDeterministicConfig,
+    IndependentDeterministicPolicy,
+    PolicyTopology,
+)
 from marl.objectives import (
     DeterministicPolicyObjective,
     LossBundle,
@@ -27,7 +32,7 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator
+from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
@@ -47,13 +52,25 @@ class MADDPGConfig:
 
     schema_version: Literal[1] = 1
     algorithm: Literal["maddpg"] = "maddpg"
-    policy: IndependentDeterministicConfig = IndependentDeterministicConfig()
-    critic: IndependentQConfig = IndependentQConfig()
+    policy: Buildable[PolicyTopology] = IndependentDeterministicConfig()
+    critic: Buildable[QEnsemble] = IndependentQConfig()
     loss: MADDPGLossConfig = MADDPGLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
     update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
+
+
+    def build(self, spec: EnvironmentSpec) -> MADDPG:
+        """在此处直接查看 MADDPG 的完整组件组合。"""
+        if spec.action_kind != ActionKind.CONTINUOUS:
+            raise ValueError("MADDPG 不支持当前动作类型")
+        return MADDPG(
+            spec, self.policy.build(spec), self.critic.build(spec),
+            TDLossObjective(self.loss.td_coefficient),
+            DeterministicPolicyObjective(),
+            self.value_target.build(),
+        )
 
 
 def default_maddpg_recipe() -> AlgorithmRecipe:
@@ -87,18 +104,20 @@ class MADDPG(BaseMARLAlgorithm):
     def __init__(
         self,
         spec: EnvironmentSpec,
-        policy: IndependentDeterministicPolicy,
-        critics: IndependentCentralizedCritics,
+        policy: PolicyTopology,
+        critics: QEnsemble,
         td_loss: TDLossObjective,
         policy_objective: DeterministicPolicyObjective,
-        return_estimator: TD0Estimator,
-        compiled_recipe: CompiledRecipe,
+        return_estimator: ValueTargetEstimator,
+        compiled_recipe: CompiledRecipe | None = None,
     ) -> None:
         super().__init__(spec)
         self.policy = policy
         self.critics = critics
-        self.target_policy = deepcopy(policy).requires_grad_(False)
-        self.target_critics = deepcopy(critics).requires_grad_(False)
+        self.target_policy = deepcopy(policy)
+        self.get_submodule("target_policy").requires_grad_(False)
+        self.target_critics = deepcopy(critics)
+        self.get_submodule("target_critics").requires_grad_(False)
         self.td_loss = td_loss
         self.policy_objective = policy_objective
         self.return_estimator = return_estimator
@@ -195,6 +214,6 @@ class MADDPG(BaseMARLAlgorithm):
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (
-            (self.target_policy, self.policy),
-            (self.target_critics, self.critics),
+            (self.get_submodule("target_policy"), self.get_submodule("policy")),
+            (self.get_submodule("target_critics"), self.get_submodule("critics")),
         )

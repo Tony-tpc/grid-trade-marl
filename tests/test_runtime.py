@@ -91,7 +91,7 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
         terminated=torch.zeros(4, 2, dtype=torch.bool),
         truncated=torch.zeros(4, 2, dtype=torch.bool),
     )
-    parameter = next(algorithm.policy.actors[0].parameters())
+    parameter = next(algorithm.policy.parameters())
     before = parameter.detach().clone()
     metrics = trainer.update_batch(batch)
     after = parameter.detach()

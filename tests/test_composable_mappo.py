@@ -79,6 +79,7 @@ def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
         first.policy.logits(batch.observations, batch.action_mask),
         second.policy.logits(batch.observations, batch.action_mask),
     )
+    assert batch.state is not None
     assert torch.allclose(first.critic(batch.state), second.critic(batch.state))
     first_bundle = first.compute_loss_bundle(batch)
     second_bundle = second.compute_loss_bundle(batch)

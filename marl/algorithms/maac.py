@@ -13,9 +13,10 @@ from torch.distributions import Categorical
 from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
-from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import AttentionCritic, AttentionQConfig
-from marl.modules.policy import IndependentDiscreteConfig, IndependentDiscretePolicy
+from marl.envs.base import ActionKind, EnvironmentSpec
+from marl.extensions import Buildable
+from marl.modules.critic import AttentionCritic, AttentionQConfig, AttentionQNetwork
+from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig, IndependentDiscretePolicy
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
@@ -24,7 +25,7 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator
+from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
@@ -45,13 +46,26 @@ class MAACConfig:
 
     schema_version: Literal[1] = 1
     algorithm: Literal["maac"] = "maac"
-    policy: IndependentDiscreteConfig = IndependentDiscreteConfig()
-    critic: AttentionQConfig = AttentionQConfig()
+    policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
+    critic: Buildable[AttentionQNetwork] = AttentionQConfig()
     loss: MAACLossConfig = MAACLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
     update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
+
+
+    def build(self, spec: EnvironmentSpec) -> MAAC:
+        """在此处直接查看 MAAC 的完整组件组合。"""
+        if spec.action_kind != ActionKind.DISCRETE:
+            raise ValueError("MAAC 不支持当前动作类型")
+        return MAAC(
+            spec, self.policy.build(spec), self.critic.build(spec),
+            TDLossObjective(self.loss.td_coefficient),
+            CounterfactualPolicyObjective(),
+            EntropyObjective(self.loss.entropy_coefficient),
+            self.value_target.build(),
+        )
 
 
 def default_maac_recipe() -> AlgorithmRecipe:
@@ -81,19 +95,21 @@ class MAAC(BaseMARLAlgorithm):
     def __init__(
         self,
         spec: EnvironmentSpec,
-        policy: IndependentDiscretePolicy,
-        critic: AttentionCritic,
+        policy: DiscretePolicy,
+        critic: AttentionQNetwork,
         td_loss: TDLossObjective,
         policy_objective: CounterfactualPolicyObjective,
         entropy_objective: EntropyObjective,
-        return_estimator: TD0Estimator,
-        compiled_recipe: CompiledRecipe,
+        return_estimator: ValueTargetEstimator,
+        compiled_recipe: CompiledRecipe | None = None,
     ) -> None:
         super().__init__(spec)
         self.policy = policy
         self.critic = critic
-        self.target_policy = deepcopy(policy).requires_grad_(False)
-        self.target_critic = deepcopy(critic).requires_grad_(False)
+        self.target_policy = deepcopy(policy)
+        self.get_submodule("target_policy").requires_grad_(False)
+        self.target_critic = deepcopy(critic)
+        self.get_submodule("target_critic").requires_grad_(False)
         self.td_loss = td_loss
         self.policy_objective = policy_objective
         self.entropy_objective = entropy_objective
@@ -182,6 +198,6 @@ class MAAC(BaseMARLAlgorithm):
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (
-            (self.target_policy, self.policy),
-            (self.target_critic, self.critic),
+            (self.get_submodule("target_policy"), self.get_submodule("policy")),
+            (self.get_submodule("target_critic"), self.get_submodule("critic")),
         )

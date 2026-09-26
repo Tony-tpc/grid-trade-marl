@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, Protocol, cast, runtime_checkable
 
 import torch
 from torch import Tensor, nn
@@ -10,6 +11,36 @@ from torch.nn import functional as F
 from marl.envs.base import EnvironmentSpec
 from marl.models.base import BaseBackbone
 from marl.models.mlp import MLPBackbone
+
+
+@runtime_checkable
+class ValueNetwork(Protocol):
+    def __call__(self, inputs: Tensor) -> Tensor: ...
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
+
+
+@runtime_checkable
+class AttentionQNetwork(Protocol):
+    def __call__(self, observations: Tensor, actions: Tensor) -> Tensor: ...
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
+
+
+@runtime_checkable
+class QEnsemble(ValueNetwork, Protocol):
+    @property
+    def critics(self) -> nn.ModuleList: ...
+
+
+@runtime_checkable
+class TwinQEnsemble(Protocol):
+    @property
+    def first(self) -> QEnsemble: ...
+
+    @property
+    def second(self) -> QEnsemble: ...
+
+    def __call__(self, inputs: Tensor) -> tuple[Tensor, Tensor]: ...
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
 
 
 class ValueCritic(nn.Module):

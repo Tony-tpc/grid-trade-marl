@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, Protocol, cast, runtime_checkable
 
 import torch
 from torch import Tensor, nn
 
 from marl.envs.base import EnvironmentSpec
+
+
+@runtime_checkable
+class MixingNetwork(Protocol):
+    def __call__(self, agent_q_values: Tensor, state: Tensor) -> Tensor: ...
 
 
 class VDNMixer(nn.Module):

@@ -10,9 +10,10 @@ from torch import Tensor, nn
 from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch, MARLModelOutput
-from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import CentralizedValueConfig
-from marl.modules.policy import IndependentDiscreteConfig, IndependentDiscretePolicy
+from marl.envs.base import ActionKind, EnvironmentSpec
+from marl.extensions import Buildable
+from marl.modules.critic import CentralizedValueConfig, ValueNetwork
+from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig, IndependentDiscretePolicy
 from marl.objectives import (
     EntropyObjective,
     LossBundle,
@@ -43,12 +44,24 @@ class MAPPOConfig:
 
     schema_version: Literal[1] = 1
     algorithm: Literal["mappo"] = "mappo"
-    policy: IndependentDiscreteConfig = IndependentDiscreteConfig()
-    critic: CentralizedValueConfig = CentralizedValueConfig()
+    policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
+    critic: Buildable[ValueNetwork] = CentralizedValueConfig()
     loss: MAPPOLossConfig = MAPPOLossConfig()
     advantage: GAEConfig = GAEConfig()
     rollout: RolloutConfig = RolloutConfig()
     update: PPOUpdateConfig = PPOUpdateConfig()
+
+
+    def build(self, spec: EnvironmentSpec) -> MAPPO:
+        """在此处直接查看 MAPPO 的完整组件组合。"""
+        if spec.action_kind != ActionKind.DISCRETE:
+            raise ValueError("MAPPO 不支持当前动作类型")
+        return MAPPO(
+            spec, self.policy.build(spec), self.critic.build(spec),
+            PPOClipObjective(self.loss.clip_ratio),
+            ValueMSEObjective(self.loss.value_coefficient),
+            EntropyObjective(self.loss.entropy_coefficient),
+        )
 
 
 def default_mappo_recipe() -> AlgorithmRecipe:
@@ -86,12 +99,12 @@ class MAPPO(BaseMARLAlgorithm):
     def __init__(
         self,
         spec: EnvironmentSpec,
-        policy: IndependentDiscretePolicy,
-        critic: nn.Module,
+        policy: DiscretePolicy,
+        critic: ValueNetwork,
         policy_objective: PPOClipObjective,
         value_objective: ValueMSEObjective,
         entropy_objective: EntropyObjective,
-        compiled_recipe: CompiledRecipe,
+        compiled_recipe: CompiledRecipe | None = None,
     ) -> None:
         super().__init__(spec)
         self.policy = policy
@@ -129,7 +142,7 @@ class MAPPO(BaseMARLAlgorithm):
 
     def values(self, observations: Tensor, state: Tensor | None = None) -> Tensor:
         critic_input = state if state is not None else observations.flatten(-2)
-        return cast(Tensor, self.critic(critic_input))
+        return self.critic(critic_input)
 
     def sample(
         self,

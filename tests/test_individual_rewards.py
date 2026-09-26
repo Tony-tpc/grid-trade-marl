@@ -49,7 +49,7 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
         default_maddpg_recipe(), returns=ComponentRecipe("td0", {"gamma": 0.0})
     )
     maddpg = MADDPG.from_recipe(spec(ActionKind.CONTINUOUS), maddpg_recipe)
-    assert maddpg.policy.actors[0] is not maddpg.policy.actors[1]
+    assert maddpg.get_submodule("policy.actors.0") is not maddpg.get_submodule("policy.actors.1")
     q = maddpg.critics(maddpg._critic_input(observations, actions))
     assert torch.allclose(
         maddpg.compute_loss_bundle(batch).terms["critic_loss"],

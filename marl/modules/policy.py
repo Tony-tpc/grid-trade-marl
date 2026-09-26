@@ -6,8 +6,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, Protocol, cast, runtime_checkable
 
 import torch
 from torch import Tensor, nn
@@ -22,6 +23,31 @@ from marl.modules.action_head import (
     GaussianActionHead,
 )
 from marl.modules.actor import Actor
+
+
+@runtime_checkable
+class PolicyTopology(Protocol):
+    def act(
+        self, observations: Tensor, *, deterministic: bool = False,
+        action_mask: Tensor | None = None,
+    ) -> MARLModelOutput: ...
+
+    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
+
+
+@runtime_checkable
+class DiscretePolicy(PolicyTopology, Protocol):
+    def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor: ...
+
+    def evaluate(
+        self, observations: Tensor, actions: Tensor, *,
+        action_mask: Tensor | None = None,
+    ) -> MARLModelOutput: ...
+
+
+@runtime_checkable
+class LocalQPolicy(PolicyTopology, Protocol):
+    def q_values(self, observations: Tensor) -> Tensor: ...
 
 
 def _stack_scalar(

@@ -12,9 +12,10 @@ from torch import Tensor, nn
 from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
-from marl.envs.base import EnvironmentSpec
-from marl.modules.critic import TwinIndependentCentralizedCritics, TwinQConfig
-from marl.modules.policy import IndependentGaussianConfig, IndependentGaussianPolicy
+from marl.envs.base import ActionKind, EnvironmentSpec
+from marl.extensions import Buildable
+from marl.modules.critic import TwinIndependentCentralizedCritics, TwinQConfig, TwinQEnsemble
+from marl.modules.policy import IndependentGaussianConfig, IndependentGaussianPolicy, PolicyTopology
 from marl.objectives import (
     LossBundle,
     ObjectiveResult,
@@ -23,7 +24,7 @@ from marl.objectives import (
 )
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator
+from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
@@ -47,13 +48,27 @@ class MASACConfig:
 
     schema_version: Literal[1] = 1
     algorithm: Literal["masac"] = "masac"
-    policy: IndependentGaussianConfig = IndependentGaussianConfig()
-    critic: TwinQConfig = TwinQConfig()
+    policy: Buildable[PolicyTopology] = IndependentGaussianConfig()
+    critic: Buildable[TwinQEnsemble] = TwinQConfig()
     loss: MASACLossConfig = MASACLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
     update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
+
+
+    def build(self, spec: EnvironmentSpec) -> MASAC:
+        """在此处直接查看 MASAC 的完整组件组合。"""
+        if spec.action_kind != ActionKind.CONTINUOUS:
+            raise ValueError("MASAC 不支持当前动作类型")
+        return MASAC(
+            spec, self.policy.build(spec), self.critic.build(spec),
+            TDLossObjective(self.loss.td_coefficient),
+            SACEntropyObjective(spec.num_agents, spec.action_dim,
+                                initial_alpha=self.loss.initial_alpha,
+                                target_entropy=self.loss.target_entropy),
+            self.value_target.build(),
+        )
 
 
 def default_masac_recipe() -> AlgorithmRecipe:
@@ -84,17 +99,18 @@ class MASAC(BaseMARLAlgorithm):
     def __init__(
         self,
         spec: EnvironmentSpec,
-        policy: IndependentGaussianPolicy,
-        critics: TwinIndependentCentralizedCritics,
+        policy: PolicyTopology,
+        critics: TwinQEnsemble,
         td_loss: TDLossObjective,
         entropy_objective: SACEntropyObjective,
-        return_estimator: TD0Estimator,
-        compiled_recipe: CompiledRecipe,
+        return_estimator: ValueTargetEstimator,
+        compiled_recipe: CompiledRecipe | None = None,
     ) -> None:
         super().__init__(spec)
         self.policy = policy
         self.critics = critics
-        self.target_critics = deepcopy(critics).requires_grad_(False)
+        self.target_critics = deepcopy(critics)
+        self.get_submodule("target_critics").requires_grad_(False)
         self.td_loss = td_loss
         self.entropy_objective = entropy_objective
         self.return_estimator = return_estimator
@@ -205,4 +221,4 @@ class MASAC(BaseMARLAlgorithm):
         return LossBundle.combine((critic_result, actor_result, alpha_result))
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
-        return ((self.target_critics, self.critics),)
+        return ((self.get_submodule("target_critics"), self.get_submodule("critics")),)

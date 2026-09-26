@@ -132,8 +132,8 @@ def test_new_environment_dimensions_only_change_adapter_spec() -> None:
     small_algorithm = MAAC.from_recipe(small.spec, default_maac_recipe())
     large_algorithm = MAAC.from_recipe(large.spec, default_maac_recipe())
     assert small_algorithm.spec != large_algorithm.spec
-    assert len(small_algorithm.policy.actors) == 2
-    assert len(large_algorithm.policy.actors) == 4
+    assert len(list(small_algorithm.get_submodule("policy.actors").children())) == 2
+    assert len(list(large_algorithm.get_submodule("policy.actors").children())) == 4
 
 
 def test_different_paper_adapter_uses_same_algorithm_and_batch_contract() -> None:
