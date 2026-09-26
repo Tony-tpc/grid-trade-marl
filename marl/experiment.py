@@ -3,22 +3,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar, overload
+from typing import Generic, TypeVar, cast, overload
 
 import numpy as np
 import torch
 
 from marl.algorithms.base import BaseMARLAlgorithm
-from marl.algorithms.maac import MAACConfig
-from marl.algorithms.maddpg import MADDPGConfig
+from marl.algorithms.maac import MAAC, MAACConfig
+from marl.algorithms.maddpg import MADDPG, MADDPGConfig
 from marl.algorithms.mappo import MAPPO, MAPPOConfig
-from marl.algorithms.masac import MASACConfig
+from marl.algorithms.masac import MASAC, MASACConfig
 from marl.algorithms.qmix import QMIXConfig
 from marl.config import AlgorithmConfig, config_to_dict
 from marl.envs.base import EnvironmentAdapter, EnvironmentSpec
 from marl.runtime import SyncVectorEnv, TensorReplayBuffer
-from marl.training.off_policy import OffPolicyTrainer, OffPolicyUpdatePlan
-from marl.training.on_policy import OnPolicyTrainer, PPOUpdatePlan
+from marl.training.off_policy import OffPolicyTrainer
+from marl.training.on_policy import OnPolicyTrainer
+from marl.training.optimization import OptimizerRuntime
 
 A = TypeVar("A", bound=BaseMARLAlgorithm, covariant=True)
 T = TypeVar("T", OnPolicyTrainer, OffPolicyTrainer, covariant=True)
@@ -85,13 +86,27 @@ def build_experiment(
             environment if isinstance(environment, SyncVectorEnv) else SyncVectorEnv([environment])
         )
         algorithm = config.build(spec).to(device)
-        optimizer = torch.optim.Adam(algorithm.parameters(), lr=config.update.learning_rate)
+        actor_optimizer = torch.optim.Adam(
+            algorithm.policy.parameters(),
+            lr=config.update.resolved_actor_learning_rate,
+        )
+        critic_optimizer = torch.optim.Adam(
+            algorithm.critic.parameters(),
+            lr=config.update.resolved_critic_learning_rate,
+        )
         trainer = OnPolicyTrainer(
             vector,
             algorithm,
             config.advantage.build(),
             config.rollout.horizon or spec.horizon,
-            PPOUpdatePlan(optimizer, config.update, generator=torch.Generator().manual_seed(seed)),
+            OptimizerRuntime(
+                {"actor": actor_optimizer, "critic": critic_optimizer},
+                {
+                    "actor": config.update.resolved_actor_max_grad_norm,
+                    "critic": config.update.resolved_critic_max_grad_norm,
+                },
+                generator=torch.Generator().manual_seed(seed),
+            ),
             device=device,
             config_data=snapshot,
         )
@@ -108,16 +123,90 @@ def _off_policy(
 ) -> Experiment[BaseMARLAlgorithm, OffPolicyTrainer]:
     # 每个 config.build 都直接调用其算法；无 registry 或无类型组件容器。
     algorithm = config.build(spec).to(device)
-    optimizer = torch.optim.Adam(
-        (p for p in algorithm.parameters() if p.requires_grad),
-        lr=config.update.learning_rate,
-    )
+    target_update = config.target_update.build()
+    if isinstance(config, MAACConfig):
+        maac = cast(MAAC, algorithm)
+        optimization = OptimizerRuntime(
+            {
+                "actor": torch.optim.Adam(
+                    maac.policy.parameters(),
+                    lr=config.update.resolved_actor_learning_rate,
+                ),
+                "critic": torch.optim.Adam(
+                    maac.critic.parameters(),
+                    lr=config.update.resolved_critic_learning_rate,
+                ),
+            },
+            {
+                "actor": config.update.resolved_actor_max_grad_norm,
+                "critic": config.update.resolved_critic_max_grad_norm,
+            },
+            target_update=target_update,
+            amp_dtype=config.update.amp_dtype,
+        )
+    elif isinstance(config, MADDPGConfig):
+        maddpg = cast(MADDPG, algorithm)
+        optimization = OptimizerRuntime(
+            {
+                "actor": torch.optim.Adam(
+                    maddpg.policy.parameters(),
+                    lr=config.update.resolved_actor_learning_rate,
+                ),
+                "critic": torch.optim.Adam(
+                    maddpg.critics.parameters(),
+                    lr=config.update.resolved_critic_learning_rate,
+                ),
+            },
+            {
+                "actor": config.update.resolved_actor_max_grad_norm,
+                "critic": config.update.resolved_critic_max_grad_norm,
+            },
+            target_update=target_update,
+            amp_dtype=config.update.amp_dtype,
+        )
+    elif isinstance(config, MASACConfig):
+        masac = cast(MASAC, algorithm)
+        optimization = OptimizerRuntime(
+            {
+                "actor": torch.optim.Adam(
+                    masac.policy.parameters(),
+                    lr=config.update.resolved_actor_learning_rate,
+                ),
+                "critic": torch.optim.Adam(
+                    masac.critics.parameters(),
+                    lr=config.update.resolved_critic_learning_rate,
+                ),
+                "temperature": torch.optim.Adam(
+                    masac.entropy_objective.parameters(),
+                    lr=config.update.resolved_temperature_learning_rate,
+                ),
+            },
+            {
+                "actor": config.update.resolved_actor_max_grad_norm,
+                "critic": config.update.resolved_critic_max_grad_norm,
+                "temperature": config.update.resolved_temperature_max_grad_norm,
+            },
+            target_update=target_update,
+            amp_dtype=config.update.amp_dtype,
+        )
+    else:
+        optimization = OptimizerRuntime(
+            {
+                "value": torch.optim.Adam(
+                    (p for p in algorithm.parameters() if p.requires_grad),
+                    lr=config.update.learning_rate,
+                )
+            },
+            {"value": config.update.max_grad_norm},
+            target_update=target_update,
+            amp_dtype=config.update.amp_dtype,
+        )
     trainer = OffPolicyTrainer(
         spec,
         algorithm,
         TensorReplayBuffer(spec, config.replay.capacity),
         config.replay,
-        OffPolicyUpdatePlan(optimizer, config.update, config.target_update.build()),
+        optimization,
         device=device,
         config_data=snapshot,
         rng=np.random.default_rng(seed),

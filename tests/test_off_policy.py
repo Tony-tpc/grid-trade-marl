@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from marl.algorithms import MADDPG, MADDPGConfig
+from marl.algorithms.maddpg import MADDPGUpdateConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -20,7 +21,7 @@ from marl.experiment import build_experiment
 from marl.modules.critic import IndependentQConfig
 from marl.modules.policy import IndependentDeterministicConfig
 from marl.target_updates import SoftTargetConfig
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import ReplayConfig
 
 
 def spec() -> EnvironmentSpec:
@@ -33,7 +34,7 @@ def training_config() -> MADDPGConfig:
         policy=IndependentDeterministicConfig(hidden_dim=16),
         critic=IndependentQConfig(hidden_dim=16),
         replay=ReplayConfig(capacity=4, batch_size=2),
-        update=OffPolicyUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
+        update=MADDPGUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
         target_update=SoftTargetConfig(tau=0.5),
     )
 
@@ -76,14 +77,19 @@ def test_off_policy_update_changes_online_and_target_parameters() -> None:
     trainer = build_experiment(spec(), training_config(), seed=8).trainer
     algorithm = trainer.algorithm
     assert isinstance(algorithm, MADDPG)
-    optimized_ids = {
+    actor_ids = {
         id(parameter)
-        for group in trainer.update_plan.optimizer.param_groups
+        for group in trainer.optimization.optimizer("actor").param_groups
         for parameter in group["params"]
     }
-    assert optimized_ids == {
-        id(parameter) for parameter in algorithm.parameters() if parameter.requires_grad
+    critic_ids = {
+        id(parameter)
+        for group in trainer.optimization.optimizer("critic").param_groups
+        for parameter in group["params"]
     }
+    optimized_ids = actor_ids | critic_ids
+    assert actor_ids == {id(parameter) for parameter in algorithm.policy.parameters()}
+    assert critic_ids == {id(parameter) for parameter in algorithm.critics.parameters()}
     assert not optimized_ids.intersection(
         id(parameter) for parameter in algorithm.target_policy.parameters()
     )
@@ -94,8 +100,15 @@ def test_off_policy_update_changes_online_and_target_parameters() -> None:
 
     assert not torch.equal(online_before, next(algorithm.policy.parameters()).detach())
     assert not torch.equal(target_before, next(algorithm.target_policy.parameters()).detach())
-    assert {"loss", "actor_loss", "critic_loss", "gradient_norm"} <= metrics.keys()
-    assert trainer.update_plan.update_count == 1
+    assert {
+        "loss",
+        "actor_loss",
+        "critic_loss",
+        "actor_gradient_norm",
+        "critic_gradient_norm",
+    } <= metrics.keys()
+    assert trainer.optimization.update_count == 1
+    assert trainer.optimization.optimizer_step_count == 2
 
 
 def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> None:
@@ -114,7 +127,8 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
     restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
     assert len(restored.replay) == 2
-    assert restored.update_plan.update_count == 1
+    assert restored.optimization.update_count == 1
+    assert restored.optimization.optimizer_step_count == 2
     assert all(
         torch.equal(left, right.detach())
         for left, right in zip(expected, restored_algorithm.parameters(), strict=True)
@@ -127,3 +141,8 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
     other_trainer = build_experiment(spec(), mismatched, seed=8).trainer
     with pytest.raises(ValueError, match="config"):
         other_trainer.load_checkpoint(checkpoint)
+
+    legacy = trainer.state_dict()
+    legacy.pop("schema_version")
+    with pytest.raises(ValueError, match="旧 schema"):
+        restored.load_state_dict(legacy)

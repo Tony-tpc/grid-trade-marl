@@ -23,9 +23,13 @@ replay:
   batch_size: 256  # 可选；每次 replay 采样量，1 <= batch_size <= capacity。
 
 update:
-  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
-  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。
+  learning_rate: 0.0003  # 可选；专用值为 null 时的兼容默认值。
+  max_grad_norm: 10  # 可选；专用值为 null 时的兼容默认值。
   amp_dtype: null  # 可选；null 使用 FP32；bf16 需要支持 BF16 的 CUDA。
+  actor_learning_rate: null  # 可选；null 回退 learning_rate。
+  critic_learning_rate: null  # 可选；null 回退 learning_rate。
+  actor_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
+  critic_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
 
 target_update:
   kind: soft  # 可选；组件实现名称，默认值如本行。

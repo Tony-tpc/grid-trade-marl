@@ -110,6 +110,40 @@ class ValueMSEObjective:
 
 
 @dataclass(frozen=True, slots=True)
+class ClippedValueObjective:
+    """PPO value clipping，使用 rollout 中保存的 old value 约束单次更新幅度。"""
+
+    coefficient: float = 0.5
+    clip_ratio: float = 0.2
+
+    def __post_init__(self) -> None:
+        if self.coefficient < 0.0:
+            raise ValueError("value coefficient 不能为负")
+        if self.clip_ratio <= 0.0:
+            raise ValueError("value clip ratio 必须大于 0")
+
+    def __call__(
+        self, values: Tensor, old_values: Tensor, returns: Tensor
+    ) -> ObjectiveResult:
+        if values.shape != returns.shape or old_values.shape != returns.shape:
+            raise ValueError("values/old_values/returns 必须具有相同逐智能体形状")
+        clipped = old_values + (values - old_values).clamp(
+            -self.clip_ratio, self.clip_ratio
+        )
+        raw_loss = torch.maximum(
+            (values - returns).pow(2), (clipped - returns).pow(2)
+        ).mean()
+        clip_fraction = ((values - old_values).abs() > self.clip_ratio).float().mean()
+        return ObjectiveResult(
+            loss=self.coefficient * raw_loss,
+            metrics={
+                "value_loss": raw_loss.detach(),
+                "value_clip_fraction": clip_fraction.detach(),
+            },
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class EntropyObjective:
     """最大化策略熵，因此对最小化目标贡献负值。"""
 

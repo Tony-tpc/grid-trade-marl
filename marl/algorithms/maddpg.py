@@ -31,7 +31,16 @@ from marl.objectives import (
 from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import (
+    ActorCriticUpdateConfig,
+    ReplayConfig,
+)
+from marl.training.optimization import OptimizerRuntime, metrics_to_float
+
+
+@dataclass(frozen=True, slots=True)
+class MADDPGUpdateConfig(ActorCriticUpdateConfig):
+    """MADDPG 的 critic→actor 更新参数。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +62,7 @@ class MADDPGConfig:
     loss: MADDPGLossConfig = MADDPGLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
-    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
+    update: MADDPGUpdateConfig = MADDPGUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
@@ -106,9 +115,23 @@ class MADDPG(BaseMARLAlgorithm):
         return self.policy.act(observations, deterministic=True, action_mask=action_mask).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        critic = self.compute_critic_loss_bundle(batch)
+        actor = self.compute_actor_loss_bundle(batch)
+        terms = {**critic.terms, **actor.terms}
+        terms["loss"] = critic.total + actor.total
+        return LossBundle(terms["loss"], terms)
+
+    def _validate_training_batch(self, batch: MARLBatch) -> None:
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MADDPG 训练需要 actions/rewards/next_observations")
+
+    def compute_critic_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """使用 replay 联合动作更新全部独立 centralized critics。"""
+
+        self._validate_training_batch(batch)
+        assert batch.actions is not None and batch.rewards is not None
+        assert batch.next_observations is not None
         terminated, _ = batch.terminal_flags()
         # ------------------- Critic Loss ------------------------
         # 每个 Q_i 都看完整联合经验，但回归各自的 r_i + gamma Q_i'。
@@ -123,7 +146,12 @@ class MADDPG(BaseMARLAlgorithm):
                 batch.rewards, next_q, terminated
             )
         critic_result = self.td_loss(current_q, target_q)
+        return LossBundle.combine((critic_result,))
 
+    def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """固定每个 Q_i 及其他 actor 动作，只更新对应 Actor_i。"""
+
+        self._validate_training_batch(batch)
         # ------------------- Actor Loss ------------------------
         # 更新 Actor_i 时，只让自己的动作 a_i 保持梯度。其他 Actor 的动作固定，
         # 因为当前优化的是 J_i，而不是把别人的收益也算进同一个目标。
@@ -148,7 +176,37 @@ class MADDPG(BaseMARLAlgorithm):
                 )
         # 所有 Agent 的 -Q_i 在 batch 和 agent 两个维度上做平均后的结果
         actor_result = self.policy_objective(torch.stack(q_terms, dim=-1))
-        return LossBundle.combine((critic_result, actor_result))
+        return LossBundle.combine((actor_result,))
+
+    def update(
+        self, batch: MARLBatch, runtime: OptimizerRuntime
+    ) -> dict[str, float]:
+        """按 critic → actor → target 的 MADDPG 顺序更新。"""
+
+        device = batch.observations.device
+        with runtime.autocast(device):
+            critic = self.compute_critic_loss_bundle(batch)
+        critic_norm = self.optimize(
+            runtime.optimizer("critic"),
+            critic,
+            runtime.max_grad_norm("critic"),
+        )
+        runtime.record_optimizer_step()
+        with runtime.autocast(device):
+            actor = self.compute_actor_loss_bundle(batch)
+        actor_norm = self.optimize(
+            runtime.optimizer("actor"),
+            actor,
+            runtime.max_grad_norm("actor"),
+        )
+        runtime.record_optimizer_step()
+        runtime.finish(self.target_pairs())
+        metrics = {**critic.terms, **actor.terms}
+        metrics["loss"] = critic.total.detach() + actor.total.detach()
+        metrics["critic_gradient_norm"] = critic_norm
+        metrics["actor_gradient_norm"] = actor_norm
+        metrics["gradient_norm"] = torch.maximum(critic_norm, actor_norm)
+        return metrics_to_float(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (

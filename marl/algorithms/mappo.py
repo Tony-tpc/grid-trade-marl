@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import torch
 from torch import Tensor
 
 from marl.algorithms.base import BaseMARLAlgorithm
@@ -14,13 +15,15 @@ from marl.extensions import Buildable
 from marl.modules.critic import CentralizedValueConfig, ValueNetwork
 from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
 from marl.objectives import (
+    ClippedValueObjective,
     EntropyObjective,
     LossBundle,
     PPOClipObjective,
     ValueMSEObjective,
 )
 from marl.returns import GAEConfig
-from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
+from marl.training.on_policy import PPOUpdateConfig, PreparedRollout, RolloutConfig
+from marl.training.optimization import OptimizerRuntime, metrics_to_float
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +113,13 @@ class MAPPO(BaseMARLAlgorithm):
         ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        policy = self.compute_policy_loss_bundle(batch)
+        value = self.compute_value_loss_bundle(batch)
+        terms = {**policy.terms, **value.terms}
+        terms["loss"] = policy.total + value.total
+        return LossBundle(total=terms["loss"], terms=terms)
+
+    def _validate_training_batch(self, batch: MARLBatch) -> None:
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None:
             raise ValueError("MAPPO 训练需要 actions")
@@ -120,13 +130,18 @@ class MAPPO(BaseMARLAlgorithm):
         for name in required:
             if batch.extras[name].shape != expected_shape:
                 raise ValueError(f"MAPPO {name} 必须具有逐智能体形状 {expected_shape}")
+
+    def compute_policy_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """只构建 policy+entropy 计算图，供 actor optimizer 独立更新。"""
+
+        self._validate_training_batch(batch)
+        assert batch.actions is not None
         output = self.policy.evaluate(
             batch.observations,
             batch.actions,
             action_mask=batch.action_mask,
         )
         assert output.log_prob is not None and output.entropy is not None
-        values = self.critic(self._critic_input(batch))
         return LossBundle.combine(
             (
                 self.policy_objective(
@@ -134,7 +149,78 @@ class MAPPO(BaseMARLAlgorithm):
                     batch.extras["old_log_prob"],
                     batch.extras["advantages"],
                 ),
-                self.value_objective(values, batch.extras["returns"]),
                 self.entropy_objective(output.entropy),
             )
         )
+
+    def compute_value_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。"""
+
+        self._validate_training_batch(batch)
+        values = self.critic(self._critic_input(batch))
+        clip_ratio = self.config.update.value_clip_ratio
+        if clip_ratio is None:
+            result = self.value_objective(values, batch.extras["returns"])
+        else:
+            result = ClippedValueObjective(
+                self.value_objective.coefficient, clip_ratio
+            )(values, batch.extras["old_values"], batch.extras["returns"])
+        return LossBundle.combine((result,))
+
+    @staticmethod
+    def _explained_variance(old_values: Tensor, returns: Tensor) -> Tensor:
+        return_variance = returns.var(unbiased=False)
+        if return_variance <= 1e-12:
+            return torch.zeros((), dtype=returns.dtype, device=returns.device)
+        return 1.0 - (returns - old_values).var(unbiased=False) / return_variance
+
+    def update(
+        self, experience: PreparedRollout, runtime: OptimizerRuntime
+    ) -> dict[str, float]:
+        """在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。"""
+
+        device = next(self.parameters()).device
+        totals: dict[str, Tensor] = {}
+        mini_batch_count = 0
+        for mini_batch in experience.minibatches(
+            epochs=self.config.update.epochs,
+            mini_batch_size=self.config.update.mini_batch_size,
+            generator=runtime.generator,
+        ):
+            mini_batch = mini_batch.to(device, non_blocking=True)
+            policy_bundle = self.compute_policy_loss_bundle(mini_batch)
+            actor_gradient_norm = self.optimize(
+                runtime.optimizer("actor"),
+                policy_bundle,
+                runtime.max_grad_norm("actor"),
+            )
+            runtime.record_optimizer_step()
+            value_bundle = self.compute_value_loss_bundle(mini_batch)
+            critic_gradient_norm = self.optimize(
+                runtime.optimizer("critic"),
+                value_bundle,
+                runtime.max_grad_norm("critic"),
+            )
+            runtime.record_optimizer_step()
+            metrics = {
+                **policy_bundle.terms,
+                **value_bundle.terms,
+                "loss": policy_bundle.total.detach() + value_bundle.total.detach(),
+                "actor_gradient_norm": actor_gradient_norm,
+                "critic_gradient_norm": critic_gradient_norm,
+                "gradient_norm": torch.maximum(
+                    actor_gradient_norm, critic_gradient_norm
+                ),
+            }
+            for name, value in metrics.items():
+                totals[name] = totals.get(name, torch.zeros_like(value)) + value.detach()
+            mini_batch_count += 1
+        if mini_batch_count == 0:
+            raise RuntimeError("MAPPO update 未产生任何 mini-batch")
+        runtime.finish()
+        averages = {name: value / mini_batch_count for name, value in totals.items()}
+        batch = experience.batch
+        averages["explained_variance"] = self._explained_variance(
+            batch.extras["old_values"], batch.extras["returns"]
+        ).to(device)
+        return metrics_to_float(averages)

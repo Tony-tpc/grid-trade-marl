@@ -1,4 +1,4 @@
-"""通用 replay、单步更新、target update 与 checkpoint 训练链。"""
+"""通用 replay 与离策略 checkpoint 训练链；不包含具体算法更新顺序。"""
 
 from __future__ import annotations
 
@@ -16,13 +16,19 @@ from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec, Transition
 from marl.objectives import LossBundle
 from marl.runtime import TensorReplayBuffer
-from marl.target_updates import TargetUpdate
+from marl.training.optimization import OptimizerRuntime
 
 
 class OffPolicyAlgorithm(Protocol):
+    """trainer 所需能力；更新顺序由具体算法的 ``update`` 定义。"""
+
+    spec: EnvironmentSpec
+
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle: ...
+
+    def update(self, batch: MARLBatch, runtime: OptimizerRuntime) -> dict[str, float]: ...
 
     def target_pairs(self) -> Iterable[tuple[nn.Module, nn.Module]]: ...
 
@@ -58,86 +64,80 @@ class OffPolicyUpdateConfig:
             raise ValueError("amp_dtype 目前只支持 torch.bfloat16")
 
 
-class OffPolicyUpdatePlan:
-    """执行一次 loss/backward/clip/step/target-update。"""
+@dataclass(frozen=True, slots=True)
+class ActorCriticUpdateConfig(OffPolicyUpdateConfig):
+    """actor-critic 公共 optimizer 字段；专用值为空时回退兼容默认值。"""
 
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        config: OffPolicyUpdateConfig,
-        target_update: TargetUpdate,
-    ) -> None:
-        self.optimizer = optimizer
-        self.config = config
-        self.target_update = target_update
-        self.update_count = 0
+    actor_learning_rate: float | None = None
+    critic_learning_rate: float | None = None
+    actor_max_grad_norm: float | None = None
+    critic_max_grad_norm: float | None = None
 
-    def update(self, algorithm: OffPolicyAlgorithm, batch: MARLBatch) -> dict[str, float]:
-        """执行一次标准 PyTorch 训练步骤。
-        用来进行整体梯度更新（包括 Actor 和 Critic 的参数更新）。
-        顺序为清除旧梯度 -> 计算 loss -> 反向传播 -> 裁剪梯度 -> 更新参数。
-        """
-        device = batch.observations.device
-        if self.config.amp_dtype is not None and (
-            device.type != "cuda" or not torch.cuda.is_bf16_supported()
+    def __post_init__(self) -> None:
+        OffPolicyUpdateConfig.__post_init__(self)
+        for name, value in (
+            ("actor_learning_rate", self.actor_learning_rate),
+            ("critic_learning_rate", self.critic_learning_rate),
+            ("actor_max_grad_norm", self.actor_max_grad_norm),
+            ("critic_max_grad_norm", self.critic_max_grad_norm),
         ):
-            raise ValueError("BF16 AMP 需要支持 BF16 的 CUDA 设备")
+            if value is not None and value <= 0.0:
+                raise ValueError(f"{name} 必须大于 0 或为 None")
 
-        self.optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(
-            device_type=device.type,
-            dtype=torch.bfloat16,
-            enabled=self.config.amp_dtype is not None,
-        ):
-            bundle = algorithm.compute_loss_bundle(batch)
-        # backward() 沿计算图应用链式法则，把梯度写入每个 Parameter 的 .grad（求导）。
-        bundle.total.backward()
-        # target network 等冻结参数不属于该 optimizer，也不应进入梯度范数统计。
-        parameters = tuple(
-            parameter for parameter in algorithm.parameters() if parameter.requires_grad
+    @property
+    def resolved_actor_learning_rate(self) -> float:
+        return self.actor_learning_rate or self.learning_rate
+
+    @property
+    def resolved_critic_learning_rate(self) -> float:
+        return self.critic_learning_rate or self.learning_rate
+
+    @property
+    def resolved_actor_max_grad_norm(self) -> float | None:
+        return (
+            self.actor_max_grad_norm
+            if self.actor_max_grad_norm is not None
+            else self.max_grad_norm
         )
-        if self.config.max_grad_norm is None:
-            squared = [
-                parameter.grad.detach().pow(2).sum()
-                for parameter in parameters
-                if parameter.grad is not None
-            ]
-            gradient_norm = (
-                torch.stack(squared).sum().sqrt()
-                if squared
-                else torch.zeros((), device=device)
-            )
-        else:
-            gradient_norm = nn.utils.clip_grad_norm_(
-                parameters, self.config.max_grad_norm
-            )
-        # optimizer.step() 才真正修改神经网络参数。
-        self.optimizer.step()
-        self.update_count += 1
-        should_update = getattr(self.target_update, "should_step", None)
-        if should_update is None or should_update(self.update_count):
-            # 更新目标网络，确保训练稳定性（DQN）。
-            self.target_update.step(algorithm.target_pairs())
-        metrics = dict(bundle.terms)
-        metrics["gradient_norm"] = gradient_norm.detach()
-        names = tuple(metrics)
-        values = torch.stack([metrics[name].reshape(()) for name in names]).cpu().tolist()
-        # 输出每个 loss 的数值，便于日志记录或 TensorBoard 可视化。
-        return dict(zip(names, values, strict=True))
 
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            "optimizer": deepcopy(self.optimizer.state_dict()),
-            "update_count": self.update_count,
-        }
+    @property
+    def resolved_critic_max_grad_norm(self) -> float | None:
+        return (
+            self.critic_max_grad_norm
+            if self.critic_max_grad_norm is not None
+            else self.max_grad_norm
+        )
 
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        self.optimizer.load_state_dict(cast(dict[str, Any], state["optimizer"]))
-        self.update_count = int(state["update_count"])
+
+@dataclass(frozen=True, slots=True)
+class TemperatureActorCriticUpdateConfig(ActorCriticUpdateConfig):
+    temperature_learning_rate: float | None = None
+    temperature_max_grad_norm: float | None = None
+
+    def __post_init__(self) -> None:
+        ActorCriticUpdateConfig.__post_init__(self)
+        for name, value in (
+            ("temperature_learning_rate", self.temperature_learning_rate),
+            ("temperature_max_grad_norm", self.temperature_max_grad_norm),
+        ):
+            if value is not None and value <= 0.0:
+                raise ValueError(f"{name} 必须大于 0 或为 None")
+
+    @property
+    def resolved_temperature_learning_rate(self) -> float:
+        return self.temperature_learning_rate or self.learning_rate
+
+    @property
+    def resolved_temperature_max_grad_norm(self) -> float | None:
+        return (
+            self.temperature_max_grad_norm
+            if self.temperature_max_grad_norm is not None
+            else self.max_grad_norm
+        )
 
 
 class OffPolicyTrainer:
-    """拥有 replay 和更新计划的通用离策略 trainer。"""
+    """拥有 replay 和 optimizer 状态的通用离策略 trainer。"""
 
     def __init__(
         self,
@@ -145,7 +145,7 @@ class OffPolicyTrainer:
         algorithm: OffPolicyAlgorithm,
         replay: TensorReplayBuffer,
         replay_config: ReplayConfig,
-        update_plan: OffPolicyUpdatePlan,
+        optimization: OptimizerRuntime,
         *,
         device: torch.device | str = "cpu",
         config_data: Mapping[str, object] | None = None,
@@ -155,7 +155,7 @@ class OffPolicyTrainer:
         self.algorithm = algorithm
         self.replay = replay
         self.replay_config = replay_config
-        self.update_plan = update_plan
+        self.optimization = optimization
         self.device = torch.device(device)
         self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
         self.rng = rng or np.random.default_rng()
@@ -175,32 +175,35 @@ class OffPolicyTrainer:
         batch = self.replay.sample(
             self.replay_config.batch_size, self.rng, device=self.device
         )
-        return self.update_plan.update(self.algorithm, batch)
+        return self.algorithm.update(batch, self.optimization)
 
     def update_batch(self, batch: MARLBatch) -> dict[str, float]:
-        """更新显式 batch；用于数学测试和外部经验源。"""
-
-        return self.update_plan.update(self.algorithm, batch.to(self.device))
+        return self.algorithm.update(batch.to(self.device), self.optimization)
 
     def state_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": 2,
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
             "config": deepcopy(self.config_data),
             "torch_rng": torch.get_rng_state().clone(),
             "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-            "update_plan": self.update_plan.state_dict(),
+            "optimization": self.optimization.state_dict(),
             "replay": self.replay.state_dict(),
             "rng": deepcopy(self.rng.bit_generator.state),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if state.get("schema_version") != 2:
+            raise ValueError(
+                "不兼容的 trainer checkpoint：旧 schema 缺少分离 optimizer 状态"
+            )
         if state.get("config") != self.config_data:
             raise ValueError("checkpoint config 与当前 trainer config 不一致")
         torch.set_rng_state(state["torch_rng"].cpu())
         if state["cuda_rng"] is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
-        self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))
+        self.optimization.load_state_dict(cast(Mapping[str, Any], state["optimization"]))
         self.replay.load_state_dict(cast(dict[str, object], state["replay"]))
         self.rng.bit_generator.state = cast(dict[str, Any], deepcopy(state["rng"]))
 

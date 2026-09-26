@@ -12,10 +12,10 @@ from typing import Any, Literal, TypeAlias, TypeVar, get_args, get_origin, get_t
 import torch
 import yaml  # type: ignore[import-untyped]
 
-from marl.algorithms.maac import MAACConfig, MAACLossConfig
-from marl.algorithms.maddpg import MADDPGConfig, MADDPGLossConfig
+from marl.algorithms.maac import MAACConfig, MAACLossConfig, MAACUpdateConfig
+from marl.algorithms.maddpg import MADDPGConfig, MADDPGLossConfig, MADDPGUpdateConfig
 from marl.algorithms.mappo import MAPPOConfig, MAPPOLossConfig
-from marl.algorithms.masac import MASACConfig, MASACLossConfig
+from marl.algorithms.masac import MASACConfig, MASACLossConfig, MASACUpdateConfig
 from marl.algorithms.qmix import QMIXConfig, QMIXLossConfig
 from marl.extensions import Buildable, Category, ExtensionCatalog, ExternalConfig
 from marl.modules.critic import (
@@ -150,10 +150,16 @@ def algorithm_config_from_dict(
     else:
         raise ValueError("target_update.kind 必须是 soft 或 hard")
     # 两类 target 共用一个明确的 union；以下参数是离策略算法的公共配置。
+    update_cls = {
+        "maac": MAACUpdateConfig,
+        "maddpg": MADDPGUpdateConfig,
+        "masac": MASACUpdateConfig,
+        "qmix": OffPolicyUpdateConfig,
+    }[name]
     shared: dict[str, Any] = dict(
         value_target=_flat(TD0Config, data.get("value_target", {}), "value_target"),
         replay=_flat(ReplayConfig, data.get("replay", {}), "replay"),
-        update=_flat(OffPolicyUpdateConfig, data.get("update", {}), "update"),
+        update=_flat(update_cls, data.get("update", {}), "update"),
         target_update=target,
     )
     if name == "maac":

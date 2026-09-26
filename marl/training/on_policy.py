@@ -1,4 +1,4 @@
-"""通用 on-policy rollout 和 PPO mini-batch 更新计划。"""
+"""通用 on-policy rollout 采集与 checkpoint；更新顺序由具体算法定义。"""
 
 from __future__ import annotations
 
@@ -14,21 +14,15 @@ from torch import Tensor, nn
 
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
-from marl.objectives import LossBundle
 from marl.returns import AdvantageEstimator
 from marl.runtime import SyncVectorEnv
+from marl.training.optimization import OptimizerRuntime
 
 
-class LossComputingModule(Protocol):
-    """PPOUpdatePlan 对具体算法的唯一要求。"""
+class OnPolicyActorCritic(Protocol):
+    """采样器需要的 actor-critic 能力，不绑定具体算法名称。"""
 
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
-
-    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle: ...
-
-
-class OnPolicyActorCritic(LossComputingModule, Protocol):
-    """采样器需要的 actor-critic 能力，不绑定具体算法名称。"""
 
     def sample(
         self,
@@ -40,6 +34,10 @@ class OnPolicyActorCritic(LossComputingModule, Protocol):
     ) -> MARLModelOutput: ...
 
     def values(self, observations: Tensor, state: Tensor | None = None) -> Tensor: ...
+
+    def update(
+        self, experience: PreparedRollout, runtime: OptimizerRuntime
+    ) -> dict[str, float]: ...
 
     def state_dict(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]: ...
 
@@ -215,107 +213,63 @@ class RolloutBuffer:
 @dataclass(frozen=True, slots=True)
 class PPOUpdateConfig:
     learning_rate: float = 3e-4
+    actor_learning_rate: float | None = None
+    critic_learning_rate: float | None = None
     epochs: int = 4
     mini_batch_size: int = 256
     max_grad_norm: float | None = 10.0
+    actor_max_grad_norm: float | None = None
+    critic_max_grad_norm: float | None = None
+    value_clip_ratio: float | None = None
 
     def __post_init__(self) -> None:
         if self.learning_rate <= 0:
             raise ValueError("learning_rate 必须大于 0")
+        for name, value in (
+            ("actor_learning_rate", self.actor_learning_rate),
+            ("critic_learning_rate", self.critic_learning_rate),
+        ):
+            if value is not None and value <= 0:
+                raise ValueError(f"{name} 必须大于 0 或为 None")
         if self.epochs < 1 or self.mini_batch_size < 1:
             raise ValueError("epochs 和 mini_batch_size 必须大于 0")
         if self.max_grad_norm is not None and self.max_grad_norm <= 0.0:
             raise ValueError("max_grad_norm 必须大于 0 或为 None")
-
-
-class PPOUpdatePlan:
-    """对 PreparedRollout 执行多 epoch、随机 mini-batch 更新。"""
-
-    def __init__(
-        self,
-        optimizer: torch.optim.Optimizer,
-        config: PPOUpdateConfig,
-        *,
-        generator: torch.Generator | None = None,
-    ) -> None:
-        self.optimizer = optimizer
-        self.config = config
-        self.generator = generator
-        self.update_count = 0
-
-    @staticmethod
-    def _explained_variance(old_values: Tensor, returns: Tensor) -> Tensor:
-        return_variance = returns.var(unbiased=False)
-        if return_variance <= 1e-12:
-            return torch.zeros((), dtype=returns.dtype, device=returns.device)
-        return 1.0 - (returns - old_values).var(unbiased=False) / return_variance
-
-    def update(
-        self, algorithm: LossComputingModule, experience: PreparedRollout
-    ) -> dict[str, float]:
-        device = next(algorithm.parameters()).device
-        totals: dict[str, Tensor] = {}
-        mini_batch_count = 0
-        for mini_batch in experience.minibatches(
-            epochs=self.config.epochs,
-            mini_batch_size=self.config.mini_batch_size,
-            generator=self.generator,
+        for name, value in (
+            ("actor_max_grad_norm", self.actor_max_grad_norm),
+            ("critic_max_grad_norm", self.critic_max_grad_norm),
+            ("value_clip_ratio", self.value_clip_ratio),
         ):
-            mini_batch = mini_batch.to(device, non_blocking=True)
-            self.optimizer.zero_grad(set_to_none=True)
-            bundle = algorithm.compute_loss_bundle(mini_batch)
-            bundle.total.backward()
-            if self.config.max_grad_norm is None:
-                gradient_norm = torch.linalg.vector_norm(
-                    torch.stack(
-                        [
-                            parameter.grad.detach().norm()
-                            for parameter in algorithm.parameters()
-                            if parameter.grad is not None
-                        ]
-                    )
-                )
-            else:
-                gradient_norm = nn.utils.clip_grad_norm_(
-                    algorithm.parameters(), self.config.max_grad_norm
-                )
-            self.optimizer.step()
-            metrics = dict(bundle.terms)
-            metrics["gradient_norm"] = gradient_norm.detach()
-            for name, value in metrics.items():
-                totals[name] = totals.get(name, torch.zeros_like(value)) + value.detach()
-            mini_batch_count += 1
+            if value is not None and value <= 0.0:
+                raise ValueError(f"{name} 必须大于 0 或为 None")
 
-        if mini_batch_count == 0:
-            raise RuntimeError("update plan 未产生任何 mini-batch")
-        self.update_count += 1
-        averages = {name: value / mini_batch_count for name, value in totals.items()}
-        batch = experience.batch
-        averages["explained_variance"] = self._explained_variance(
-            batch.extras["old_values"], batch.extras["returns"]
-        ).to(device)
-        names = tuple(averages)
-        values = torch.stack([averages[name].reshape(()) for name in names]).cpu().tolist()
-        return dict(zip(names, values, strict=True))
+    @property
+    def resolved_actor_learning_rate(self) -> float:
+        return self.actor_learning_rate or self.learning_rate
 
-    def state_dict(self) -> dict[str, Any]:
-        return {
-            "optimizer": deepcopy(self.optimizer.state_dict()),
-            "generator": self.generator.get_state().clone() if self.generator is not None else None,
-            "update_count": self.update_count,
-        }
+    @property
+    def resolved_critic_learning_rate(self) -> float:
+        return self.critic_learning_rate or self.learning_rate
 
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        self.optimizer.load_state_dict(cast(dict[str, Any], state["optimizer"]))
-        self.update_count = int(state["update_count"])
-        if state["generator"] is not None:
-            if self.generator is None:
-                self.generator = torch.Generator()
-            self.generator.set_state(state["generator"].cpu())
+    @property
+    def resolved_actor_max_grad_norm(self) -> float | None:
+        return (
+            self.actor_max_grad_norm
+            if self.actor_max_grad_norm is not None
+            else self.max_grad_norm
+        )
+
+    @property
+    def resolved_critic_max_grad_norm(self) -> float | None:
+        return (
+            self.critic_max_grad_norm
+            if self.critic_max_grad_norm is not None
+            else self.max_grad_norm
+        )
 
 
 class OnPolicyTrainer:
-    """从并行环境采集 fresh rollout，并交给通用 UpdatePlan。"""
+    """采集 fresh rollout，并调用具体 on-policy 算法的 update。"""
 
     def __init__(
         self,
@@ -323,7 +277,7 @@ class OnPolicyTrainer:
         algorithm: OnPolicyActorCritic,
         estimator: AdvantageEstimator,
         rollout_horizon: int,
-        update_plan: PPOUpdatePlan,
+        optimization: OptimizerRuntime,
         *,
         device: torch.device | str = "cpu",
         config_data: Mapping[str, object] | None = None,
@@ -334,7 +288,7 @@ class OnPolicyTrainer:
         self.algorithm = algorithm
         self.estimator = estimator
         self.rollout_horizon = rollout_horizon
-        self.update_plan = update_plan
+        self.optimization = optimization
         self.device = torch.device(device)
         self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
 
@@ -414,25 +368,30 @@ class OnPolicyTrainer:
         return buffer.finish(next_value, self.estimator)
 
     def train_rollout(self, seeds: list[int]) -> dict[str, float]:
-        return self.update_plan.update(self.algorithm, self.collect(seeds))
+        return self.algorithm.update(self.collect(seeds), self.optimization)
 
     def state_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": 2,
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
             "config": deepcopy(self.config_data),
             "torch_rng": torch.get_rng_state().clone(),
             "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-            "update_plan": self.update_plan.state_dict(),
+            "optimization": self.optimization.state_dict(),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        if state.get("schema_version") != 2:
+            raise ValueError(
+                "不兼容的 trainer checkpoint：旧 schema 缺少分离 optimizer 状态"
+            )
         if state.get("config") != self.config_data:
             raise ValueError("checkpoint config 与当前 trainer config 不一致")
         torch.set_rng_state(state["torch_rng"].cpu())
         if state["cuda_rng"] is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
-        self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))
+        self.optimization.load_state_dict(cast(Mapping[str, Any], state["optimization"]))
 
     def save_checkpoint(self, path: str | Path) -> None:
         target = Path(path)

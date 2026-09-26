@@ -24,7 +24,16 @@ from marl.objectives import (
 from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import (
+    ReplayConfig,
+    TemperatureActorCriticUpdateConfig,
+)
+from marl.training.optimization import OptimizerRuntime, metrics_to_float
+
+
+@dataclass(frozen=True, slots=True)
+class MASACUpdateConfig(TemperatureActorCriticUpdateConfig):
+    """MASAC 的 twin critic→actor→temperature 更新参数。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +59,7 @@ class MASACConfig:
     loss: MASACLossConfig = MASACLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
-    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
+    update: MASACUpdateConfig = MASACUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
@@ -99,9 +108,25 @@ class MASAC(BaseMARLAlgorithm):
         ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        critic = self.compute_critic_loss_bundle(batch)
+        actor_result, temperature_result = self._actor_and_temperature_results(batch)
+        actor = LossBundle.combine((actor_result,))
+        temperature = LossBundle.combine((temperature_result,))
+        terms = {**critic.terms, **actor.terms, **temperature.terms}
+        terms["loss"] = critic.total + actor_result.loss + temperature_result.loss
+        return LossBundle(terms["loss"], terms)
+
+    def _validate_training_batch(self, batch: MARLBatch) -> None:
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MASAC 训练需要 actions/rewards/next_observations")
+
+    def compute_critic_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """使用 replay 动作更新 twin centralized critics。"""
+
+        self._validate_training_batch(batch)
+        assert batch.actions is not None and batch.rewards is not None
+        assert batch.next_observations is not None
         terminated, _ = batch.terminal_flags()
         q1, q2 = self.critics(
             self._critic_input(batch.observations, batch.actions)
@@ -126,7 +151,18 @@ class MASAC(BaseMARLAlgorithm):
             critic_loss,
             {"critic_loss": critic_loss.detach()},
         )
+        return LossBundle.combine((critic_result,))
 
+    def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """固定 twin critics 与其他 actor 动作，更新当前策略。"""
+
+        actor_result, _ = self._actor_and_temperature_results(batch)
+        return LossBundle.combine((actor_result,))
+
+    def _actor_and_temperature_results(
+        self, batch: MARLBatch
+    ) -> tuple[ObjectiveResult, ObjectiveResult]:
+        self._validate_training_batch(batch)
         policy_output = self.policy.act(batch.observations)
         assert policy_output.log_prob is not None
         q_terms = []
@@ -151,10 +187,57 @@ class MASAC(BaseMARLAlgorithm):
         actor_result = self.entropy_objective.actor(
             policy_output.log_prob, min_q
         )
-        alpha_result = self.entropy_objective.temperature(
-            policy_output.log_prob
+        temperature_result = self.entropy_objective.temperature(policy_output.log_prob)
+        return actor_result, temperature_result
+
+    def compute_temperature_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """只更新 log alpha；策略 log-prob 在目标内部显式 detach。"""
+
+        _, temperature_result = self._actor_and_temperature_results(batch)
+        return LossBundle.combine((temperature_result,))
+
+    def update(
+        self, batch: MARLBatch, runtime: OptimizerRuntime
+    ) -> dict[str, float]:
+        """按 twin critic → actor → temperature → target 的 MASAC 顺序更新。"""
+
+        device = batch.observations.device
+        with runtime.autocast(device):
+            critic = self.compute_critic_loss_bundle(batch)
+        critic_norm = self.optimize(
+            runtime.optimizer("critic"),
+            critic,
+            runtime.max_grad_norm("critic"),
         )
-        return LossBundle.combine((critic_result, actor_result, alpha_result))
+        runtime.record_optimizer_step()
+        with runtime.autocast(device):
+            actor = self.compute_actor_loss_bundle(batch)
+        actor_norm = self.optimize(
+            runtime.optimizer("actor"),
+            actor,
+            runtime.max_grad_norm("actor"),
+        )
+        runtime.record_optimizer_step()
+        with runtime.autocast(device):
+            temperature = self.compute_temperature_loss_bundle(batch)
+        temperature_norm = self.optimize(
+            runtime.optimizer("temperature"),
+            temperature,
+            runtime.max_grad_norm("temperature"),
+        )
+        runtime.record_optimizer_step()
+        runtime.finish(self.target_pairs())
+        metrics = {**critic.terms, **actor.terms, **temperature.terms}
+        metrics["loss"] = (
+            critic.total.detach() + actor.total.detach() + temperature.total.detach()
+        )
+        metrics["critic_gradient_norm"] = critic_norm
+        metrics["actor_gradient_norm"] = actor_norm
+        metrics["temperature_gradient_norm"] = temperature_norm
+        metrics["gradient_norm"] = torch.stack(
+            (critic_norm, actor_norm, temperature_norm)
+        ).max()
+        return metrics_to_float(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return ((self.get_submodule("target_critics"), self.get_submodule("critics")),)

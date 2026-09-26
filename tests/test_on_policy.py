@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from dataclasses import replace
 
 import pytest
 import torch
-from torch import Tensor, nn
 
-from marl.core import MARLBatch
+from marl.algorithms import MAPPO, MAPPOConfig
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
-from marl.objectives import LossBundle, ObjectiveResult
 from marl.returns import GAEEstimator
-from marl.training import PPOUpdatePlan, PreparedRollout, RolloutBuffer
+from marl.training import OptimizerRuntime, PreparedRollout, RolloutBuffer
 from marl.training.on_policy import PPOUpdateConfig
 
 
@@ -106,48 +104,49 @@ def test_rollout_rejects_missing_masks_and_incomplete_finish() -> None:
         incomplete.finish(torch.zeros(1, 2), GAEEstimator())
 
 
-class TinyLossModule(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.tensor(1.0))
-
-    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
-        prediction = self.weight * batch.observations[..., 0]
-        target = batch.extras["returns"]
-        loss = ((prediction - target) ** 2).mean()
-        return LossBundle.combine(
-            (ObjectiveResult(loss=loss, metrics={"regression_loss": loss.detach()}),)
-        )
-
-
-def parameter_values(module: nn.Module) -> Iterator[Tensor]:
-    return (parameter.detach().clone() for parameter in module.parameters())
-
-
-def test_update_plan_updates_parameters_reports_metrics_and_restores_state() -> None:
-    algorithm = TinyLossModule()
-    optimizer = torch.optim.Adam(algorithm.parameters(), lr=0.01)
-    plan = PPOUpdatePlan(
-        optimizer,
-        PPOUpdateConfig(epochs=2, mini_batch_size=2, max_grad_norm=0.1),
+def test_mappo_update_reports_metrics_and_restores_optimizer_runtime() -> None:
+    config = replace(
+        MAPPOConfig(),
+        update=PPOUpdateConfig(epochs=2, mini_batch_size=2, max_grad_norm=0.1),
+    )
+    algorithm = MAPPO(spec(), config)
+    runtime = OptimizerRuntime(
+        {
+            "actor": torch.optim.Adam(algorithm.policy.parameters(), lr=0.01),
+            "critic": torch.optim.Adam(algorithm.critic.parameters(), lr=0.02),
+        },
+        {"actor": 0.1, "critic": 0.1},
         generator=torch.Generator().manual_seed(5),
     )
-    before = tuple(parameter_values(algorithm))
-    metrics = plan.update(algorithm, prepare())
-    after = tuple(parameter_values(algorithm))
+    before = tuple(parameter.detach().clone() for parameter in algorithm.parameters())
+    metrics = algorithm.update(prepare(), runtime)
+    after = tuple(parameter.detach().clone() for parameter in algorithm.parameters())
 
     assert any(not torch.equal(left, right) for left, right in zip(before, after, strict=True))
     assert {
         "loss",
-        "regression_loss",
-        "gradient_norm",
+        "policy_loss",
+        "value_loss",
+        "actor_gradient_norm",
+        "critic_gradient_norm",
         "explained_variance",
     } <= metrics.keys()
-    assert plan.update_count == 1
+    assert runtime.update_count == 1
+    assert runtime.optimizer_step_count == 12
 
-    state = plan.state_dict()
-    restored_optimizer = torch.optim.Adam(algorithm.parameters(), lr=0.5)
-    restored = PPOUpdatePlan(restored_optimizer, plan.config)
+    state = runtime.state_dict()
+    restored = OptimizerRuntime(
+        {
+            "actor": torch.optim.Adam(algorithm.policy.parameters(), lr=0.5),
+            "critic": torch.optim.Adam(algorithm.critic.parameters(), lr=0.6),
+        },
+        {"actor": 0.1, "critic": 0.1},
+    )
     restored.load_state_dict(state)
     assert restored.update_count == 1
-    assert restored.optimizer.param_groups[0]["lr"] == pytest.approx(0.01)
+    assert restored.optimizer_step_count == 12
+    assert restored.optimizer("actor").param_groups[0]["lr"] == pytest.approx(0.01)
+    assert restored.optimizer("critic").param_groups[0]["lr"] == pytest.approx(0.02)
+
+    with pytest.raises(ValueError, match="旧单 optimizer"):
+        restored.load_state_dict({"optimizer": {}, "update_count": 1})

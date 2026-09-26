@@ -18,7 +18,11 @@ from marl.modules.policy import LocalQPolicy, SharedDiscreteQConfig
 from marl.objectives import LossBundle, ObjectiveResult, TDLossObjective
 from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import (
+    OffPolicyUpdateConfig,
+    ReplayConfig,
+)
+from marl.training.optimization import OptimizerRuntime, metrics_to_float
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +143,24 @@ class QMIX(BaseMARLAlgorithm):
             },
         )
         return LossBundle.combine((result,))
+
+    def update(
+        self, batch: MARLBatch, runtime: OptimizerRuntime
+    ) -> dict[str, float]:
+        """QMIX 仅执行一次 value optimizer，再更新 target。"""
+
+        with runtime.autocast(batch.observations.device):
+            bundle = self.compute_loss_bundle(batch)
+        value_norm = self.optimize(
+            runtime.optimizer("value"),
+            bundle,
+            runtime.max_grad_norm("value"),
+        )
+        runtime.record_optimizer_step()
+        runtime.finish(self.target_pairs())
+        metrics = dict(bundle.terms)
+        metrics["gradient_norm"] = value_norm
+        return metrics_to_float(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
         return (

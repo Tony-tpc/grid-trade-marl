@@ -71,8 +71,9 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 | `marl/objectives.py` | 纯数学目标与 `LossBundle` | 增加可复用目标函数 |
 | `marl/returns.py` | GAE、TD0 及配置、估计器能力协议 | 修改 advantage/target 估计 |
 | `marl/target_updates.py` | hard/soft target 更新及配置 | 修改目标网络同步 |
-| `marl/training/on_policy.py` | RolloutBuffer、PPOUpdatePlan、OnPolicyTrainer | 修改 fresh rollout 与 PPO 更新 |
-| `marl/training/off_policy.py` | replay 配置、OffPolicyUpdatePlan、OffPolicyTrainer | 修改离策略更新与 checkpoint |
+| `marl/training/on_policy.py` | RolloutBuffer、OnPolicyTrainer | 修改 fresh rollout 采集与 checkpoint |
+| `marl/training/off_policy.py` | replay 配置、OffPolicyTrainer | 修改离策略经验与 checkpoint |
+| `marl/training/optimization.py` | 命名 optimizer 状态、AMP、更新计数 | 修改跨算法通用优化运行状态 |
 | `marl/training/gradients.py` | 临时冻结网络参数但保留输入梯度 | 调整 actor/critic 梯度边界 |
 | `marl/runtime.py` | 设备选择、向量环境、TensorReplayBuffer | 修改运行设施 |
 | `marl/envs/` | 环境、adapter、EnvironmentSpec、独立环境配置 | 数据、奖励、物理规则、动作编码 |

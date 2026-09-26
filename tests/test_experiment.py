@@ -129,7 +129,7 @@ def test_catalog_builds_external_modules_once_and_restores(tmp_path):
         config_to_dict(config), catalog=catalog,
     ))
     restored.trainer.load_checkpoint(checkpoint)
-    assert restored.trainer.update_plan.update_count == 1
+    assert restored.trainer.optimization.update_count == 1
     assert counts == {"policy": 2, "critic": 2}
     with pytest.raises(ValueError, match="已注册"):
         catalog.register("policy", "custom", parse, policy,

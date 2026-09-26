@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 import torch
 from torch.distributions import Categorical
 
@@ -7,6 +8,7 @@ from marl.algorithms import MAPPO, MAPPOConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.objectives import (
+    ClippedValueObjective,
     EntropyObjective,
     LossBundle,
     PPOClipObjective,
@@ -37,6 +39,19 @@ def test_loss_bundle_combines_value_and_entropy_coefficients() -> None:
     assert torch.allclose(bundle.terms["value_loss"], torch.tensor(2.5))
     assert torch.allclose(bundle.terms["entropy"], torch.tensor(3.0))
     assert torch.allclose(bundle.total, torch.tensor(0.95))
+
+
+def test_clipped_value_objective_uses_saved_old_values() -> None:
+    objective = ClippedValueObjective(coefficient=0.5, clip_ratio=0.2)
+    values = torch.tensor([[2.0, 0.1]])
+    old_values = torch.zeros_like(values)
+    returns = torch.tensor([[1.0, 1.0]])
+
+    result = objective(values, old_values, returns)
+
+    # agent 0: max((2-1)^2, (0.2-1)^2)=1; agent 1: max(.81,.81)=.81
+    assert result.loss.item() == pytest.approx(0.5 * (1.0 + 0.81) / 2.0)
+    assert result.metrics["value_clip_fraction"].item() == pytest.approx(0.5)
 
 
 def test_gae_distinguishes_termination_from_time_limit_truncation() -> None:

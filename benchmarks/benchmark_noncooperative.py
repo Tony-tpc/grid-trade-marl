@@ -26,6 +26,9 @@ from marl.algorithms import (
     QMIXConfig,
 )
 from marl.algorithms.base import BaseMARLAlgorithm
+from marl.algorithms.maac import MAACUpdateConfig
+from marl.algorithms.maddpg import MADDPGUpdateConfig
+from marl.algorithms.masac import MASACUpdateConfig
 from marl.config import AlgorithmConfig
 from marl.envs import (
     ActionKind,
@@ -47,7 +50,7 @@ from marl.modules.policy import (
 )
 from marl.runtime import SyncVectorEnv, resolve_device
 from marl.training import OffPolicyTrainer, OnPolicyTrainer
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import ReplayConfig
 from marl.training.on_policy import PPOUpdateConfig
 
 ALGORITHMS = ("maac", "mappo", "maddpg", "masac", "qmix")
@@ -96,14 +99,13 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
         capacity=max(2048, settings.train_episodes * settings.horizon),
         batch_size=settings.replay_batch_size,
     )
-    off_policy_update = OffPolicyUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0)
     hidden = settings.hidden_dim
     if name == "maac":
         return MAACConfig(
             policy=IndependentDiscreteConfig(hidden_dim=hidden),
             critic=AttentionQConfig(hidden_dim=hidden, attention_heads=4),
             replay=replay,
-            update=off_policy_update,
+            update=MAACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "mappo":
         return MAPPOConfig(
@@ -121,14 +123,14 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
             policy=IndependentDeterministicConfig(hidden_dim=hidden),
             critic=IndependentQConfig(hidden_dim=hidden),
             replay=replay,
-            update=off_policy_update,
+            update=MADDPGUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "masac":
         return MASACConfig(
             policy=IndependentGaussianConfig(hidden_dim=hidden),
             critic=TwinQConfig(hidden_dim=hidden),
             replay=replay,
-            update=off_policy_update,
+            update=MASACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "qmix":
         return QMIXConfig()
@@ -411,7 +413,7 @@ def _train_off_policy(
                         seed=seed,
                         episode=completed_episode,
                         environment_steps=environment_steps,
-                        updates=trainer.update_plan.update_count,
+                        updates=trainer.optimization.update_count,
                         elapsed_seconds=time.perf_counter() - started,
                         metric_rows=metrics[metric_start:],
                     )
@@ -422,7 +424,7 @@ def _train_off_policy(
             seed,
             experiment.algorithm,
             metrics,
-            trainer.update_plan.update_count,
+            trainer.optimization.update_count,
             action_kind,
             settings,
             device,
@@ -479,7 +481,7 @@ def _train_mappo(
                         seed=seed,
                         episode=completed_episode,
                         environment_steps=environment_steps,
-                        updates=trainer.update_plan.update_count,
+                        updates=trainer.optimization.update_count,
                         elapsed_seconds=time.perf_counter() - started,
                         metric_rows=metrics[metric_start:],
                     )
@@ -490,7 +492,7 @@ def _train_mappo(
             seed,
             experiment.algorithm,
             metrics,
-            trainer.update_plan.update_count,
+            trainer.optimization.update_count,
             ActionKind.DISCRETE,
             settings,
             device,

@@ -164,7 +164,7 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
         not torch.equal(left, right.detach()) for left, right in zip(before, after, strict=True)
     )
     assert {"policy_loss", "value_loss", "entropy", "approx_kl"} <= metrics.keys()
-    assert trainer.update_plan.update_count == 1
+    assert trainer.optimization.update_count == 1
 
     checkpoint = tmp_path / "trainer.pt"
     trainer.save_checkpoint(checkpoint)
@@ -175,8 +175,10 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
     restored = build_experiment(environment, config, seed=8).trainer
     restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
-    assert restored.update_plan.update_count == 1
-    assert restored.update_plan.optimizer.param_groups[0]["lr"] == pytest.approx(1e-3)
+    assert restored.optimization.update_count == 1
+    assert restored.optimization.optimizer("actor").param_groups[0]["lr"] == pytest.approx(1e-3)
+    assert restored.optimization.optimizer("critic").param_groups[0]["lr"] == pytest.approx(1e-3)
+    assert restored.optimization.optimizer_step_count > 0
     assert all(
         torch.equal(expected, actual.detach())
         for expected, actual in zip(saved_parameters, restored_algorithm.parameters(), strict=True)

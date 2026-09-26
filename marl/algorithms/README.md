@@ -113,13 +113,13 @@ MADDPG、MASAC、QMIX 和 MAAC 使用目标网络；on-policy 的 MAPPO 不需�
 ## 7. 一次训练更新
 
 MAPPO 使用完整的 fresh on-policy 链路：`OnPolicyTrainer` 采集固定 horizon 的 rollout，
-保存 old log-prob/value，按 termination/truncation 语义计算 GAE，再由 `PPOUpdatePlan`
+保存 old log-prob/value，按 termination/truncation 语义计算 GAE，再由 `MAPPO.update()`
 随机生成 mini-batch 并执行多个 epoch。一次 rollout 更新后即失效，不能进入长期 replay。
 
 MAAC、MADDPG、MASAC、QMIX 使用 `OffPolicyTrainer`：trainer 持有 replay buffer，
-`OffPolicyUpdatePlan` 统一执行 `LossBundle.total.backward()`、梯度裁剪、optimizer step
-和 config 选择的 soft/hard target update。具体算法只实现 `compute_loss_bundle()` 和
-`target_pairs()`，不直接更新参数。
+具体算法的 `update()` 明确声明 critic/actor/temperature/target 的顺序；所有算法复用
+`BaseMARLAlgorithm.optimize()` 完成单次 zero-grad、backward、梯度裁剪和 optimizer step。
+`OptimizerRuntime` 只保存命名 optimizer、更新计数和 checkpoint 状态，不含算法分支。
 
 ## 8. 当前基础版本的边界
 

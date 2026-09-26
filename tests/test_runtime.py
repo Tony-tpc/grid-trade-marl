@@ -4,6 +4,7 @@ import numpy as np
 import torch
 
 from marl.algorithms import MAACConfig
+from marl.algorithms.maac import MAACUpdateConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -19,7 +20,7 @@ from marl.experiment import build_experiment
 from marl.modules.critic import AttentionQConfig
 from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import TensorReplayBuffer
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import ReplayConfig
 
 
 def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
@@ -75,7 +76,7 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
         policy=IndependentDiscreteConfig(hidden_dim=16),
         critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
         replay=ReplayConfig(capacity=8, batch_size=4),
-        update=OffPolicyUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
+        update=MAACUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
     )
     experiment = build_experiment(spec, config, seed=8)
     trainer = experiment.trainer

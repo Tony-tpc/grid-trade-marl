@@ -27,7 +27,12 @@ rollout:
   horizon: null  # 可选；null 使用环境 horizon，否则 1 <= horizon <= 环境 horizon。
 
 update:
-  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
+  learning_rate: 0.0003  # 可选；专用学习率为 null 时的兼容默认值，必须 > 0。
+  actor_learning_rate: null  # 可选；null 回退 learning_rate。
+  critic_learning_rate: null  # 可选；null 回退 learning_rate。
   epochs: 4  # 可选；每份 fresh rollout 的更新轮数，必须 >= 1。
   mini_batch_size: 256  # 可选；展平 [T,B] 后的 mini-batch 大小，必须 >= 1。
-  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。
+  max_grad_norm: 10  # 可选；专用上限为 null 时的兼容默认值。
+  actor_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
+  critic_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
+  value_clip_ratio: null  # 可选；正数启用基于 old value 的 PPO value clipping。
