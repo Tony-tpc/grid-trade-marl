@@ -97,8 +97,7 @@
 | `marl/core/` | 跨算法数据协议：`MARLBatch`、`MARLModelOutput` | 论文公式、环境规则 |
 | `marl/envs/` | 环境、adapter、`EnvironmentSpec`、动作编解码 | optimizer、loss |
 | `marl/models/` | MLP/GRU/GNN/Transformer 等表示学习 backbone | 训练循环 |
-| `marl/modules/` | Actor、Critic、Mixer、ActionHead | 环境结算规则 |
-| `marl/policies.py` | 观测到动作分布的策略拓扑 | rollout 生命周期 |
+| `marl/modules/` | Actor、Policy 拓扑、Critic、Mixer、ActionHead | 环境结算规则、rollout 生命周期 |
 | `marl/objectives.py` | 可复用目标函数和 `LossBundle` | optimizer.step |
 | `marl/returns.py` | GAE、未来可扩展的 return estimator | 环境 reset |
 | `marl/components.py` | 平级组件协议 | 具体算法注册 |
@@ -114,10 +113,10 @@
 依赖方向应尽量保持：
 
 ```text
-core <- models/modules <- policies/objectives/returns
-  ^              ^                 ^
-  |              +------ algorithms+
-  +-- envs/runtime/training --------+
+core <- models <- modules <- algorithms
+  ^                   ^          ^
+  +-- objectives/returns --------+
+  +-- envs/runtime/training -----+
 registry/recipes 只负责选择和装配，不反向依赖具体论文环境。
 ```
 

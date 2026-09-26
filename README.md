@@ -50,7 +50,8 @@ marl/
 │   ├── gnn.py              # 本地消息传递，不依赖 PyG
 │   └── transformer.py      # agent/time token 建模
 ├── modules/
-│   ├── actor.py            # Backbone + ActionHead
+│   ├── actor.py            # 单智能体 Backbone + ActionHead
+│   ├── policy.py           # 多智能体策略拓扑与参数共享关系
 │   ├── critic.py           # 独立/集中式 Critic
 │   ├── mixer.py            # VDNMixer / QMixer
 │   └── action_head.py      # 离散与 tanh-Gaussian 动作分布
@@ -65,7 +66,6 @@ marl/
 │   ├── on_policy.py        # RolloutBuffer、PPOUpdatePlan、OnPolicyTrainer
 │   └── off_policy.py       # Replay、OffPolicyUpdatePlan、OffPolicyTrainer
 ├── components.py           # 六类平级组件协议
-├── policies.py             # 可复用策略拓扑
 ├── objectives.py           # PPO/value/entropy 目标与 LossBundle
 ├── returns.py              # GAE 等 return estimator
 ├── registry.py             # 显式分类注册表
@@ -100,7 +100,8 @@ EnvironmentAdapter.spec ──> EnvironmentSpec ──> compile recipe
 
 - `EnvironmentSpec` 描述静态能力与尺寸，不包含训练超参数。
 - `MARLBatch` 是环境、缓冲区、算法和 trainer 之间的公共数据语言。
-- model 只做表示学习，module 负责 Actor/Critic/Mixer 等网络角色。
+- model 只做表示学习；module 负责单智能体 Actor、动作头、多智能体 Policy 拓扑、
+  Critic 和 Mixer 等网络角色。
 - component 表达可替换机制，recipe 只选择组件与超参数。
 - algorithm 是薄装配类；trainer/update plan 管理数据生命周期和参数更新。
 
@@ -113,7 +114,7 @@ EnvironmentAdapter.spec ──> EnvironmentSpec ──> compile recipe
 | 新增 loss 或正则项 | `objectives.py` + registry | 覆写整套训练循环 |
 | 新增 GAE/V-trace/n-step | `returns.py` + registry | 修改环境 |
 | 换 MLP 为 GRU/GNN/Transformer | `models/`、policy factory | 修改奖励 |
-| 新动作分布或参数共享拓扑 | `modules/action_head.py`、`policies.py` | 把编码写入 trainer |
+| 新动作分布或参数共享拓扑 | `modules/action_head.py`、`modules/policy.py` | 把编码写入 trainer |
 | 新市场/机器人/博弈环境 | `envs/` + adapter | 修改通用算法 |
 | 新 replay/rollout 数据生命周期 | experience source、`training/` | 按算法名硬编码分支 |
 | 新 optimizer 更新顺序 | UpdatePlan | 在算法中调用 `optimizer.step()` |
