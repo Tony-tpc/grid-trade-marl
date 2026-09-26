@@ -12,6 +12,7 @@ from marl.modules.critic import (
     IndependentCentralizedCritics,
     TwinIndependentCentralizedCritics,
     ValueCritic,
+    centralized_critic_input,
 )
 from marl.modules.mixer import QMixer, VDNMixer
 from marl.modules.policy import (
@@ -37,4 +38,5 @@ __all__ = [
     "TwinIndependentCentralizedCritics",
     "VDNMixer",
     "ValueCritic",
+    "centralized_critic_input",
 ]

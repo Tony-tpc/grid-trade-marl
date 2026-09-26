@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -18,7 +17,7 @@ from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import IndependentQConfig, QEnsemble
+from marl.modules.critic import IndependentQConfig, QEnsemble, centralized_critic_input
 from marl.modules.policy import (
     IndependentDeterministicConfig,
     PolicyTopology,
@@ -29,8 +28,8 @@ from marl.objectives import (
     TDLossObjective,
 )
 from marl.returns import TD0Config, ValueTargetEstimator
-from marl.target_updates import HardTargetConfig, SoftTargetConfig
-from marl.training.gradients import frozen_parameters
+from marl.target_updates import HardTargetConfig, SoftTargetConfig, frozen_target
+from marl.training.gradients import frozen_parameters, isolate_agent_action
 from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     ReplayConfig,
@@ -90,18 +89,11 @@ class MADDPG(BaseMARLAlgorithm):
         self.config = config
         self.policy = config.policy.build(spec)
         self.critics = config.critic.build(spec)
-        self.target_policy = deepcopy(self.policy)
-        self.get_submodule("target_policy").requires_grad_(False)
-        self.target_critics = deepcopy(self.critics)
-        self.get_submodule("target_critics").requires_grad_(False)
+        self.target_policy = frozen_target(self.policy)
+        self.target_critics = frozen_target(self.critics)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
         self.policy_objective = DeterministicPolicyObjective()
         self.return_estimator: ValueTargetEstimator = config.value_target.build()
-
-    @staticmethod
-    def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:
-        """把联合观测和动作展平后拼成 ``[B, N * (O + A)]``。"""
-        return torch.cat((observations.flatten(-2), actions.flatten(-2)), dim=-1)
 
     def act(
         self,
@@ -135,12 +127,12 @@ class MADDPG(BaseMARLAlgorithm):
         terminated, _ = batch.terminal_flags()
         # ------------------- Critic Loss ------------------------
         # 每个 Q_i 都看完整联合经验，但回归各自的 r_i + gamma Q_i'。
-        current_input = self._critic_input(batch.observations, batch.actions)
+        current_input = centralized_critic_input(batch.observations, batch.actions)
         current_q = self.critics(current_input)
         with torch.no_grad():
             next_actions = self.target_policy.act(batch.next_observations).actions
             next_q = self.target_critics(
-                self._critic_input(batch.next_observations, next_actions)
+                centralized_critic_input(batch.next_observations, next_actions)
             )
             target_q = self.return_estimator.estimate(
                 batch.rewards, next_q, terminated
@@ -160,19 +152,12 @@ class MADDPG(BaseMARLAlgorithm):
         q_terms = []
         for index, critic in enumerate(self.critics.critics):
             # joint_actions = [detach(a_(j不等于i),...,a_(i=j),...]
-            joint_actions = torch.stack(
-                [
-                    # 当前 Agent 的动作保留梯度，其他 Agent 的动作视作常量。
-                    policy_actions[..., other, :]
-                    if other == index
-                    else policy_actions[..., other, :].detach()
-                    for other in range(self.spec.num_agents)
-                ],
-                dim=-2,
-            )
+            joint_actions = isolate_agent_action(policy_actions, index)
             with frozen_parameters(critic):
                 q_terms.append(
-                    critic(self._critic_input(batch.observations, joint_actions)).squeeze(-1)
+                    critic(
+                        centralized_critic_input(batch.observations, joint_actions)
+                    ).squeeze(-1)
                 )
         # 所有 Agent 的 -Q_i 在 batch 和 agent 两个维度上做平均后的结果
         actor_result = self.policy_objective(torch.stack(q_terms, dim=-1))

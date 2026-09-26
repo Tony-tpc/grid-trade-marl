@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -13,7 +12,7 @@ from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import TwinQConfig, TwinQEnsemble
+from marl.modules.critic import TwinQConfig, TwinQEnsemble, centralized_critic_input
 from marl.modules.policy import IndependentGaussianConfig, PolicyTopology
 from marl.objectives import (
     LossBundle,
@@ -22,8 +21,8 @@ from marl.objectives import (
     TDLossObjective,
 )
 from marl.returns import TD0Config, ValueTargetEstimator
-from marl.target_updates import HardTargetConfig, SoftTargetConfig
-from marl.training.gradients import frozen_parameters
+from marl.target_updates import HardTargetConfig, SoftTargetConfig, frozen_target
+from marl.training.gradients import frozen_parameters, isolate_agent_action
 from marl.training.off_policy import (
     ReplayConfig,
     TemperatureActorCriticUpdateConfig,
@@ -80,18 +79,13 @@ class MASAC(BaseMARLAlgorithm):
         self.config = config
         self.policy = config.policy.build(spec)
         self.critics = config.critic.build(spec)
-        self.target_critics = deepcopy(self.critics)
-        self.get_submodule("target_critics").requires_grad_(False)
+        self.target_critics = frozen_target(self.critics)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
         self.entropy_objective = SACEntropyObjective(
             spec.num_agents, spec.action_dim,
             initial_alpha=config.loss.initial_alpha, target_entropy=config.loss.target_entropy,
         )
         self.return_estimator: ValueTargetEstimator = config.value_target.build()
-
-    @staticmethod
-    def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:
-        return torch.cat((observations.flatten(-2), actions.flatten(-2)), dim=-1)
 
     def act(
         self,
@@ -129,13 +123,13 @@ class MASAC(BaseMARLAlgorithm):
         assert batch.next_observations is not None
         terminated, _ = batch.terminal_flags()
         q1, q2 = self.critics(
-            self._critic_input(batch.observations, batch.actions)
+            centralized_critic_input(batch.observations, batch.actions)
         )
         with torch.no_grad():
             next_output = self.policy.act(batch.next_observations)
             assert next_output.log_prob is not None
             next_q1, next_q2 = self.target_critics(
-                self._critic_input(batch.next_observations, next_output.actions)
+                centralized_critic_input(batch.next_observations, next_output.actions)
             )
             soft_next = (
                 torch.minimum(next_q1, next_q2)
@@ -167,16 +161,8 @@ class MASAC(BaseMARLAlgorithm):
         assert policy_output.log_prob is not None
         q_terms = []
         for index in range(self.spec.num_agents):
-            joint_actions = torch.stack(
-                [
-                    policy_output.actions[..., other, :]
-                    if other == index
-                    else policy_output.actions[..., other, :].detach()
-                    for other in range(self.spec.num_agents)
-                ],
-                dim=-2,
-            )
-            policy_input = self._critic_input(batch.observations, joint_actions)
+            joint_actions = isolate_agent_action(policy_output.actions, index)
+            policy_input = centralized_critic_input(batch.observations, joint_actions)
             first = self.critics.first.critics[index]
             second = self.critics.second.critics[index]
             with frozen_parameters(first), frozen_parameters(second):

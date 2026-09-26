@@ -3,11 +3,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar
 
 import torch
 from torch import nn
+
+ModuleT = TypeVar("ModuleT")
+
+
+def frozen_target(module: ModuleT) -> ModuleT:
+    """复制 online 网络并冻结参数，作为注册到算法上的 target 网络。"""
+
+    target = deepcopy(module)
+    if not isinstance(target, nn.Module):
+        raise TypeError("target network 必须是 nn.Module")
+    target.requires_grad_(False)
+    return target
 
 
 @dataclass(frozen=True, slots=True)

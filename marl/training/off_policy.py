@@ -16,6 +16,13 @@ from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec, Transition
 from marl.objectives import LossBundle
 from marl.runtime import TensorReplayBuffer
+from marl.training.checkpoint import (
+    build_trainer_checkpoint_state,
+    load_checkpoint_state,
+    restore_torch_rng_state,
+    save_checkpoint_state,
+    validate_trainer_checkpoint_state,
+)
 from marl.training.optimization import OptimizerRuntime
 
 
@@ -181,41 +188,27 @@ class OffPolicyTrainer:
         return self.algorithm.update(batch.to(self.device), self.optimization)
 
     def state_dict(self) -> dict[str, Any]:
-        return {
-            "schema_version": 2,
-            "algorithm": deepcopy(dict(self.algorithm.state_dict())),
-            "config": deepcopy(self.config_data),
-            "torch_rng": torch.get_rng_state().clone(),
-            "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
-            "optimization": self.optimization.state_dict(),
-            "replay": self.replay.state_dict(),
-            "rng": deepcopy(self.rng.bit_generator.state),
-        }
+        state = build_trainer_checkpoint_state(
+            self.algorithm.state_dict(),
+            self.config_data,
+            self.optimization.state_dict(),
+        )
+        state["replay"] = self.replay.state_dict()
+        state["rng"] = deepcopy(self.rng.bit_generator.state)
+        return state
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        if state.get("schema_version") != 2:
-            raise ValueError(
-                "不兼容的 trainer checkpoint：旧 schema 缺少分离 optimizer 状态"
-            )
-        if state.get("config") != self.config_data:
-            raise ValueError("checkpoint config 与当前 trainer config 不一致")
-        torch.set_rng_state(state["torch_rng"].cpu())
-        if state["cuda_rng"] is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
+        validate_trainer_checkpoint_state(state, self.config_data)
+        restore_torch_rng_state(state)
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
         self.optimization.load_state_dict(cast(Mapping[str, Any], state["optimization"]))
         self.replay.load_state_dict(cast(dict[str, object], state["replay"]))
         self.rng.bit_generator.state = cast(dict[str, Any], deepcopy(state["rng"]))
 
     def save_checkpoint(self, path: str | Path) -> None:
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self.state_dict(), target)
+        save_checkpoint_state(self.state_dict(), path)
 
     def load_checkpoint(
         self, path: str | Path, *, map_location: str | torch.device = "cpu"
     ) -> None:
-        state = torch.load(path, map_location=map_location, weights_only=False)
-        if not isinstance(state, Mapping):
-            raise TypeError("trainer checkpoint 顶层必须是 mapping")
-        self.load_state_dict(cast(Mapping[str, Any], state))
+        self.load_state_dict(load_checkpoint_state(path, map_location=map_location))

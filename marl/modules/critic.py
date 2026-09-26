@@ -13,6 +13,18 @@ from marl.models.base import BaseBackbone
 from marl.models.mlp import MLPBackbone
 
 
+def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor:
+    """把 ``[..., N, O]`` 与 ``[..., N, A]`` 拼成 ``[..., N*O + N*A]``。"""
+
+    if observations.ndim < 2 or actions.ndim < 2:
+        raise ValueError("observations 和 actions 至少需要智能体维与特征维")
+    if observations.shape[:-2] != actions.shape[:-2]:
+        raise ValueError("observations 和 actions 的批次维必须一致")
+    if observations.shape[-2] != actions.shape[-2]:
+        raise ValueError("observations 和 actions 的智能体数量必须一致")
+    return torch.cat((observations.flatten(-2), actions.flatten(-2)), dim=-1)
+
+
 @runtime_checkable
 class ValueNetwork(Protocol):
     def __call__(self, inputs: Tensor) -> Tensor: ...

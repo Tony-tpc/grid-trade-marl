@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -17,7 +16,7 @@ from marl.modules.mixer import MixingNetwork, QMixerConfig
 from marl.modules.policy import LocalQPolicy, SharedDiscreteQConfig
 from marl.objectives import LossBundle, ObjectiveResult, TDLossObjective
 from marl.returns import TD0Config, ValueTargetEstimator
-from marl.target_updates import HardTargetConfig, SoftTargetConfig
+from marl.target_updates import HardTargetConfig, SoftTargetConfig, frozen_target
 from marl.training.off_policy import (
     OffPolicyUpdateConfig,
     ReplayConfig,
@@ -67,10 +66,8 @@ class QMIX(BaseMARLAlgorithm):
         self.config = config
         self.policy = config.policy.build(spec)
         self.mixer = config.mixer.build(spec)
-        self.target_policy = deepcopy(self.policy)
-        self.get_submodule("target_policy").requires_grad_(False)
-        self.target_mixer = deepcopy(self.mixer)
-        self.get_submodule("target_mixer").requires_grad_(False)
+        self.target_policy = frozen_target(self.policy)
+        self.target_mixer = frozen_target(self.mixer)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
         self.return_estimator: ValueTargetEstimator = config.value_target.build()
 

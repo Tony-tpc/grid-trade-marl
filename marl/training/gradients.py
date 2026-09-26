@@ -5,7 +5,27 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from torch import nn
+import torch
+from torch import Tensor, nn
+
+
+def isolate_agent_action(actions: Tensor, agent_index: int) -> Tensor:
+    """只保留 ``agent_index`` 动作的梯度，其他智能体动作视作常量。"""
+
+    if actions.ndim < 2:
+        raise ValueError("actions 至少需要智能体维与动作维")
+    num_agents = actions.shape[-2]
+    if not 0 <= agent_index < num_agents:
+        raise IndexError("agent_index 超出智能体范围")
+    return torch.stack(
+        [
+            actions[..., index, :]
+            if index == agent_index
+            else actions[..., index, :].detach()
+            for index in range(num_agents)
+        ],
+        dim=-2,
+    )
 
 
 @contextmanager

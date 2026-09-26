@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import Literal
 
@@ -24,7 +23,7 @@ from marl.objectives import (
     TDLossObjective,
 )
 from marl.returns import TD0Config, ValueTargetEstimator
-from marl.target_updates import HardTargetConfig, SoftTargetConfig
+from marl.target_updates import HardTargetConfig, SoftTargetConfig, frozen_target
 from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     ReplayConfig,
@@ -79,10 +78,8 @@ class MAAC(BaseMARLAlgorithm):
         self.config = config
         self.policy = config.policy.build(spec)
         self.critic = config.critic.build(spec)
-        self.target_policy = deepcopy(self.policy)
-        self.get_submodule("target_policy").requires_grad_(False)
-        self.target_critic = deepcopy(self.critic)
-        self.get_submodule("target_critic").requires_grad_(False)
+        self.target_policy = frozen_target(self.policy)
+        self.target_critic = frozen_target(self.critic)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
         self.policy_objective = CounterfactualPolicyObjective()
         self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)

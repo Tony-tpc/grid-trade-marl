@@ -12,6 +12,7 @@ from marl.algorithms.masac import MASACConfig
 from marl.algorithms.qmix import QMIXConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.modules import centralized_critic_input
 
 CASES = [MAPPOConfig(), MAACConfig(), MADDPGConfig(), MASACConfig(), QMIXConfig()]
 
@@ -68,7 +69,7 @@ def test_matches_pre_migration_numerical_fixture(config):
     elif config.algorithm == "qmix":
         values = model.policy.q_values(batch.observations)
     else:
-        values = model.critics(model._critic_input(batch.observations, batch.actions))
+        values = model.critics(centralized_critic_input(batch.observations, batch.actions))
     if isinstance(values, tuple):
         values = torch.stack(values)
     torch.testing.assert_close(values, torch.tensor(expected["values"]), rtol=1e-6, atol=1e-6)

@@ -20,6 +20,7 @@ from marl.algorithms import (
 )
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.modules import centralized_critic_input
 from marl.returns import TD0Config
 
 
@@ -48,14 +49,14 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
     maddpg_config = replace(MADDPGConfig(), value_target=TD0Config(gamma=0.0))
     maddpg = MADDPG(spec(ActionKind.CONTINUOUS), maddpg_config)
     assert maddpg.get_submodule("policy.actors.0") is not maddpg.get_submodule("policy.actors.1")
-    q = maddpg.critics(maddpg._critic_input(observations, actions))
+    q = maddpg.critics(centralized_critic_input(observations, actions))
     assert torch.allclose(
         maddpg.compute_loss_bundle(batch).terms["critic_loss"],
         F.mse_loss(q, rewards),
     )
     masac_config = replace(MASACConfig(), value_target=TD0Config(gamma=0.0))
     masac = MASAC(spec(ActionKind.CONTINUOUS), masac_config)
-    q1, q2 = masac.critics(masac._critic_input(observations, actions))
+    q1, q2 = masac.critics(centralized_critic_input(observations, actions))
     expected = F.mse_loss(q1, rewards) + F.mse_loss(q2, rewards)
     assert torch.allclose(masac.compute_loss_bundle(batch).terms["critic_loss"], expected)
 
