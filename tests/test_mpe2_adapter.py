@@ -11,7 +11,12 @@ import pytest
 import torch
 from gymnasium import spaces
 
-from benchmarks.benchmark_noncooperative import BenchmarkSettings, run_benchmark
+from benchmarks.benchmark_noncooperative import (
+    BenchmarkSettings,
+    _training_iterations,
+    run_benchmark,
+    write_summary_csv,
+)
 from benchmarks.plot_noncooperative import generate_plots
 from marl.algorithms import QMIXConfig
 from marl.envs import (
@@ -200,6 +205,7 @@ def test_all_algorithms_have_complete_noncooperative_smoke_report(
             hidden_dim=8,
         ),
         device=torch.device("cpu"),
+        artifact_dir=tmp_path / "artifacts",
     )
     results = {
         result["algorithm"]: result
@@ -211,20 +217,71 @@ def test_all_algorithms_have_complete_noncooperative_smoke_report(
         assert results[algorithm]["numerically_stable"] is True
         seed_result = results[algorithm]["seeds"][0]
         assert seed_result["environment_steps"] == 2
-        assert len(seed_result["evaluation_history"]) == 1
+        assert len(seed_result["evaluation_history"]) == 2
+        assert seed_result["evaluation_history"][0]["environment_steps"] == 0
+        assert seed_result["evaluation_history"][0]["updates"] == 0
+        assert seed_result["optimizer_steps"] >= seed_result["updates"]
+        assert len(seed_result["checkpoint"]["sha256"]) == 64
+        assert Path(seed_result["checkpoint"]["path"]).is_file()
     assert results["qmix"]["status"] == "expected_incompatible"
+    assert report["comparison_groups"]["discrete"]["algorithms"] == ["maac", "mappo"]
+    assert report["comparison_groups"]["continuous"]["algorithms"] == [
+        "maddpg",
+        "masac",
+    ]
+    assert len(report["cross_play"]) == 2
+    assert all(
+        np.asarray(group["adversary_returns"]).shape == (2, 2)
+        for group in report["cross_play"]
+    )
+    assert all(
+        np.asarray(group["good_team_returns"]).shape == (2, 2)
+        for group in report["cross_play"]
+    )
 
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
+    summary_path = tmp_path / "summary.csv"
+    write_summary_csv(report, summary_path)
+    assert len(summary_path.read_text(encoding="utf-8").splitlines()) == 5
     plots = generate_plots(report_path, tmp_path / "plots")
     assert {plot.name for plot in plots} == {
-        "learning_curves.png",
-        "final_returns.png",
-        "return_distributions.png",
-        "loss_stability.png",
+        "learning_curves_discrete.png",
+        "learning_curves_continuous.png",
+        "final_returns_discrete.png",
+        "final_returns_continuous.png",
+        "return_distributions_discrete.png",
+        "return_distributions_continuous.png",
+        "loss_stability_discrete.png",
+        "loss_stability_continuous.png",
+        "gradient_entropy_stability_discrete.png",
+        "gradient_entropy_stability_continuous.png",
+        "cross_play_discrete.png",
+        "cross_play_continuous.png",
         "training_efficiency.png",
     }
     assert all(plot.stat().st_size > 0 for plot in plots)
+
+
+def test_benchmark_requires_exact_training_and_evaluation_step_boundaries() -> None:
+    with pytest.raises(ValueError, match="target_environment_steps"):
+        _training_iterations(
+            BenchmarkSettings(
+                num_envs=2,
+                horizon=3,
+                eval_interval_steps=12,
+                target_environment_steps=13,
+            )
+        )
+    with pytest.raises(ValueError, match="eval_interval_steps"):
+        _training_iterations(
+            BenchmarkSettings(
+                num_envs=2,
+                horizon=3,
+                eval_interval_steps=10,
+                target_environment_steps=12,
+            )
+        )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="需要 CUDA")

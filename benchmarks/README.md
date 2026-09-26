@@ -55,35 +55,48 @@ output_complete 还要求每个算法提供其应有指标：
 
 | 算法 | 必需指标 |
 |---|---|
-| MAAC | loss、critic_loss、actor_loss、entropy、gradient_norm |
-| MAPPO | loss、policy_loss、value_loss、entropy、approx_kl、clip_fraction、gradient_norm、explained_variance |
-| MADDPG | loss、critic_loss、actor_loss、gradient_norm |
-| MASAC | loss、critic_loss、actor_loss、alpha_loss、alpha、gradient_norm |
+| MAAC | loss、critic_loss、actor_loss、entropy_ratio、actor/critic_gradient_norm |
+| MAPPO | loss、policy/value_loss、entropy_ratio、approx_kl、clip_fraction、explained_variance、actor/critic_gradient_norm |
+| MADDPG | loss、critic_loss、actor_loss、actor/critic_gradient_norm |
+| MASAC | loss、critic_loss、actor_loss、alpha、actor/critic/temperature_gradient_norm |
 | QMIX | expected_incompatible 原因 |
+
+报告不会跨动作空间选“总冠军”。离散组只比较 MAAC 与 MAPPO，连续组只比较
+MADDPG 与 MASAC；每组分别给出 adversary 与 good-team 的跨 seed 均值、标准差、
+95% 置信区间和排名。每次训练在 step 0 先评估未训练策略，之后按固定环境步间隔评估。
+
+同动作空间 cross-play 将算法/seed A 的 adversary actor 与算法/seed B 的两个
+good-agent actors 组合，在统一 seed 上评估；报告保留 adversary 和 good-team 两张矩阵，
+不把冲突双方的回报合成单一分数。
 
 ## 运行
 
-完整对比使用相同环境交互预算、3 个随机种子和固定评估场景：
+论文级对比使用每算法 5 个随机种子、每 seed 100,000 环境步和固定评估场景：
 
 ```powershell
 .\.venv\Scripts\python.exe benchmarks\benchmark_noncooperative.py `
-  --device auto --seeds 7 17 29 --train-episodes 100 `
-  --num-envs 1 --eval-episodes 10 --eval-interval 10 `
+  --device auto --seeds 7 17 29 41 53 --environment-steps 100000 `
+  --num-envs 4 --horizon 25 --eval-episodes 10 --eval-interval-steps 10000 `
   --output benchmark-results\mpe2_simple_adversary_full.json
 .\.venv\Scripts\python.exe benchmarks\plot_noncooperative.py `
   benchmark-results\mpe2_simple_adversary_full.json `
   --output-dir benchmark-results\plots
 ```
 
-这里每个算法、每个随机种子都使用 2,500 个环境 step。评估使用同一组固定 seed，
-避免曲线差异来自评估关卡随机性。
+100,000 必须能被 `num_envs*horizon` 整除，脚本会拒绝不精确的预算，避免算法间
+交互量不同。评估与 cross-play 使用统一固定 seed，避免曲线差异来自评估关卡随机性。
+JSON 同目录还会生成 CSV 摘要和 `<report>_artifacts/checkpoints/` 下的最终 checkpoint；
+每个 seed 记录配置快照、MPE2 版本、CUDA/GPU、update/optimizer-step 数与 SHA-256。
 
-绘图命令生成五张图片：
+绘图命令生成十三张图片：
 
-- `learning_curves.png`：对手和协作方的跨 seed 学习曲线与 95% 置信区间；
-- `final_returns.png`：各算法最终策略的分角色平均回报；
-- `return_distributions.png`：最终策略在评估 episode 上的回报分布；
-- `loss_stability.png`：各 seed 的区间平均 loss 与总体趋势；
+- `learning_curves_{discrete,continuous}.png`：含 step 0 的分组学习曲线；
+- `final_returns_{discrete,continuous}.png`：分动作空间、分角色终局回报与 95% CI；
+- `return_distributions_{discrete,continuous}.png`：分组终局回报分布；
+- `loss_stability_{discrete,continuous}.png`：区间平均 loss；
+- `gradient_entropy_stability_{discrete,continuous}.png`：actor/critic 梯度、裁剪相关指标、
+  离散熵比例、PPO 诊断与 SAC alpha；
+- `cross_play_{discrete,continuous}.png`：对手与协作方分开的 cross-play 热力图；
 - `training_efficiency.png`：相同交互预算下的耗时和环境吞吐率。
 
 快速检查可缩短为：
