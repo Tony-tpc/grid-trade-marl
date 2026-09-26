@@ -13,8 +13,8 @@ from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
 from marl.modules.mixer import QMixer
+from marl.modules.policy import SharedDiscreteQPolicy
 from marl.objectives import LossBundle, ObjectiveResult, TDLossObjective
-from marl.policies import SharedDiscreteQPolicy
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
 from marl.returns import TD0Estimator

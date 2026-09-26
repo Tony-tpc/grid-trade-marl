@@ -18,12 +18,12 @@ from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
 from marl.modules.critic import IndependentCentralizedCritics
+from marl.modules.policy import IndependentDeterministicPolicy
 from marl.objectives import (
     DeterministicPolicyObjective,
     LossBundle,
     TDLossObjective,
 )
-from marl.policies import IndependentDeterministicPolicy
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
 from marl.returns import TD0Estimator

@@ -14,6 +14,12 @@ from marl.modules.critic import (
     ValueCritic,
 )
 from marl.modules.mixer import QMixer, VDNMixer
+from marl.modules.policy import (
+    IndependentDeterministicPolicy,
+    IndependentDiscretePolicy,
+    IndependentGaussianPolicy,
+    SharedDiscreteQPolicy,
+)
 
 __all__ = [
     "Actor",
@@ -23,7 +29,11 @@ __all__ = [
     "DiscreteActionHead",
     "GaussianActionHead",
     "IndependentCentralizedCritics",
+    "IndependentDeterministicPolicy",
+    "IndependentDiscretePolicy",
+    "IndependentGaussianPolicy",
     "QMixer",
+    "SharedDiscreteQPolicy",
     "TwinIndependentCentralizedCritics",
     "VDNMixer",
     "ValueCritic",

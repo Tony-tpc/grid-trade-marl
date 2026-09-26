@@ -17,6 +17,12 @@ from marl.modules.critic import (
     TwinIndependentCentralizedCritics,
 )
 from marl.modules.mixer import QMixer
+from marl.modules.policy import (
+    IndependentDeterministicPolicy,
+    IndependentDiscretePolicy,
+    IndependentGaussianPolicy,
+    SharedDiscreteQPolicy,
+)
 from marl.objectives import (
     CounterfactualPolicyObjective,
     DeterministicPolicyObjective,
@@ -25,12 +31,6 @@ from marl.objectives import (
     SACEntropyObjective,
     TDLossObjective,
     ValueMSEObjective,
-)
-from marl.policies import (
-    IndependentDeterministicPolicy,
-    IndependentDiscretePolicy,
-    IndependentGaussianPolicy,
-    SharedDiscreteQPolicy,
 )
 from marl.registry import ComponentKind, ComponentRegistry
 from marl.returns import GAEEstimator, TD0Estimator

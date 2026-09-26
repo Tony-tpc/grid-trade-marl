@@ -16,7 +16,13 @@ from marl.algorithms import (
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.models import GNNBackbone, GRUBackbone, MLPBackbone, TransformerBackbone
-from marl.modules import Actor, DiscreteActionHead, QMixer, VDNMixer
+from marl.modules import (
+    Actor,
+    DiscreteActionHead,
+    IndependentDiscretePolicy,
+    QMixer,
+    VDNMixer,
+)
 
 
 def test_all_backbones_follow_shape_contract() -> None:
@@ -40,8 +46,39 @@ def test_actor_and_mask() -> None:
     observations = torch.randn(8, 3, 6)
     mask = torch.tensor([True, False, False, False]).expand(8, 3, 4)
     result = actor(observations, deterministic=True, action_mask=mask)
+    evaluated = actor.evaluate_actions(
+        observations, result.actions, action_mask=mask
+    )
     assert result.actions.shape == (8, 3)
     assert torch.equal(result.actions, torch.zeros_like(result.actions))
+    assert torch.equal(evaluated.actions, result.actions)
+    assert torch.allclose(evaluated.log_prob, result.log_prob)
+    assert torch.allclose(
+        evaluated.distribution_params["logits"],
+        result.distribution_params["logits"],
+    )
+
+
+def test_independent_policy_only_stacks_actor_results() -> None:
+    policy = IndependentDiscretePolicy(2, 3, 4, 8)
+    observations = torch.randn(5, 2, 3)
+    mask = torch.ones(5, 2, 4, dtype=torch.bool)
+    mask[..., 1, 3] = False
+
+    sampled = policy.act(observations, deterministic=True, action_mask=mask)
+    evaluated = policy.evaluate(
+        observations, sampled.actions, action_mask=mask
+    )
+
+    assert sampled.actions.shape == (5, 2)
+    assert sampled.log_prob is not None and sampled.log_prob.shape == (5, 2)
+    assert sampled.entropy is not None and sampled.entropy.shape == (5, 2)
+    assert sampled.logits is not None and sampled.logits.shape == (5, 2, 4)
+    assert evaluated.log_prob is not None
+    assert evaluated.logits is not None
+    assert torch.equal(evaluated.actions, sampled.actions)
+    assert torch.allclose(evaluated.log_prob, sampled.log_prob)
+    assert torch.allclose(evaluated.logits, sampled.logits)
 
 
 def test_mixers() -> None:

@@ -1,4 +1,8 @@
-"""可复用的策略参数共享拓扑。"""
+"""多智能体策略拓扑。
+
+``Actor`` 负责一个智能体的 backbone 和 action head；本模块只负责参数共享关系、
+逐智能体输入选择、联合形状校验和输出堆叠，不拥有 rollout 或 loss 生命周期。
+"""
 
 from __future__ import annotations
 
@@ -6,11 +10,11 @@ from typing import cast
 
 import torch
 from torch import Tensor, nn
-from torch.distributions import Categorical
 
 from marl.core import MARLModelOutput
 from marl.models.mlp import MLPBackbone
 from marl.modules.action_head import (
+    ActionHeadOutput,
     DeterministicActionHead,
     DiscreteActionHead,
     GaussianActionHead,
@@ -18,8 +22,28 @@ from marl.modules.action_head import (
 from marl.modules.actor import Actor
 
 
+def _stack_scalar(
+    outputs: list[ActionHeadOutput], attribute: str
+) -> Tensor:
+    """把每个 Actor 的 ``[*B]`` 结果堆叠为 ``[*B, N]``。"""
+
+    return torch.stack(
+        [cast(Tensor, getattr(output, attribute)) for output in outputs],
+        dim=-1,
+    )
+
+
+def _stack_parameter(outputs: list[ActionHeadOutput], name: str) -> Tensor:
+    """把每个 Actor 的 ``[*B, A]`` 分布参数堆叠为 ``[*B, N, A]``。"""
+
+    return torch.stack(
+        [output.distribution_params[name] for output in outputs],
+        dim=-2,
+    )
+
+
 class IndependentDiscretePolicy(nn.Module):
-    """每个同构智能体拥有独立 MLP Actor 的离散策略。"""
+    """每个同构智能体拥有独立离散 Actor 的策略拓扑。"""
 
     def __init__(
         self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
@@ -36,7 +60,9 @@ class IndependentDiscretePolicy(nn.Module):
             for _ in range(num_agents)
         )
 
-    def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor:
+    def _validate(
+        self, observations: Tensor, action_mask: Tensor | None
+    ) -> None:
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError(
                 "observations 末两维应为 "
@@ -47,13 +73,19 @@ class IndependentDiscretePolicy(nn.Module):
             self.action_dim,
         ):
             raise ValueError("action_mask 应为 [...,N,A] 且前置维与 observations 一致")
+
+    def _mask_for(self, action_mask: Tensor | None, index: int) -> Tensor | None:
+        return action_mask[..., index, :] if action_mask is not None else None
+
+    def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor:
+        """返回联合分类参数 ``[*B, N, A]``，不采样动作。"""
+
+        self._validate(observations, action_mask)
         return torch.stack(
             [
                 cast(Actor, actor).discrete_logits(
                     observations[..., index, :],
-                    action_mask=(
-                        action_mask[..., index, :] if action_mask is not None else None
-                    ),
+                    action_mask=self._mask_for(action_mask, index),
                 )
                 for index, actor in enumerate(self.actors)
             ],
@@ -67,14 +99,22 @@ class IndependentDiscretePolicy(nn.Module):
         deterministic: bool = False,
         action_mask: Tensor | None = None,
     ) -> MARLModelOutput:
-        logits = self.logits(observations, action_mask)
-        distribution = Categorical(logits=logits, validate_args=False)
-        actions = logits.argmax(dim=-1) if deterministic else distribution.sample()
+        """对各 Actor 采样并返回 ``actions/log_prob/entropy`` 的逐智能体结果。"""
+
+        self._validate(observations, action_mask)
+        outputs = [
+            cast(Actor, actor)(
+                observations[..., index, :],
+                deterministic=deterministic,
+                action_mask=self._mask_for(action_mask, index),
+            )
+            for index, actor in enumerate(self.actors)
+        ]
         return MARLModelOutput(
-            actions=actions,
-            logits=logits,
-            log_prob=distribution.log_prob(actions),
-            entropy=distribution.entropy(),
+            actions=_stack_scalar(outputs, "actions"),
+            logits=_stack_parameter(outputs, "logits"),
+            log_prob=_stack_scalar(outputs, "log_prob"),
+            entropy=_stack_scalar(outputs, "entropy"),
         )
 
     def evaluate(
@@ -84,20 +124,29 @@ class IndependentDiscretePolicy(nn.Module):
         *,
         action_mask: Tensor | None = None,
     ) -> MARLModelOutput:
-        logits = self.logits(observations, action_mask)
+        """评估给定联合动作；不会重新采样。"""
+
+        self._validate(observations, action_mask)
         if actions.shape != observations.shape[:-1]:
             raise ValueError("离散 actions 应为 [...,N]")
-        distribution = Categorical(logits=logits, validate_args=False)
+        outputs = [
+            cast(Actor, actor).evaluate_actions(
+                observations[..., index, :],
+                actions[..., index],
+                action_mask=self._mask_for(action_mask, index),
+            )
+            for index, actor in enumerate(self.actors)
+        ]
         return MARLModelOutput(
-            actions=actions,
-            logits=logits,
-            log_prob=distribution.log_prob(actions.long()),
-            entropy=distribution.entropy(),
+            actions=_stack_scalar(outputs, "actions"),
+            logits=_stack_parameter(outputs, "logits"),
+            log_prob=_stack_scalar(outputs, "log_prob"),
+            entropy=_stack_scalar(outputs, "entropy"),
         )
 
 
 class IndependentDeterministicPolicy(nn.Module):
-    """每个智能体拥有独立确定性连续 Actor。"""
+    """每个智能体拥有独立确定性连续 Actor 的策略拓扑。"""
 
     def __init__(
         self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
@@ -125,19 +174,21 @@ class IndependentDeterministicPolicy(nn.Module):
             raise ValueError("连续策略不使用 action_mask")
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
-        actions = torch.stack(
-            [
-                actor(observations[..., index, :], deterministic=True).actions
-                for index, actor in enumerate(self.actors)
-            ],
-            dim=-2,
+        outputs = [
+            cast(Actor, actor)(
+                observations[..., index, :], deterministic=deterministic
+            )
+            for index, actor in enumerate(self.actors)
+        ]
+        return MARLModelOutput(
+            actions=torch.stack([output.actions for output in outputs], dim=-2),
+            log_prob=_stack_scalar(outputs, "log_prob"),
+            entropy=_stack_scalar(outputs, "entropy"),
         )
-        zeros = torch.zeros_like(actions[..., 0])
-        return MARLModelOutput(actions=actions, log_prob=zeros, entropy=zeros)
 
 
 class IndependentGaussianPolicy(nn.Module):
-    """每个智能体拥有独立 tanh-Gaussian Actor。"""
+    """每个智能体拥有独立 tanh-Gaussian Actor 的策略拓扑。"""
 
     def __init__(
         self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
@@ -166,18 +217,20 @@ class IndependentGaussianPolicy(nn.Module):
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
         outputs = [
-            actor(observations[..., index, :], deterministic=deterministic)
+            cast(Actor, actor)(
+                observations[..., index, :], deterministic=deterministic
+            )
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
             actions=torch.stack([output.actions for output in outputs], dim=-2),
-            log_prob=torch.stack([output.log_prob for output in outputs], dim=-1),
-            entropy=torch.stack([output.entropy for output in outputs], dim=-1),
+            log_prob=_stack_scalar(outputs, "log_prob"),
+            entropy=_stack_scalar(outputs, "entropy"),
         )
 
 
 class SharedDiscreteQPolicy(nn.Module):
-    """同构智能体共享局部 Q 网络的离散执行策略。"""
+    """同构智能体共享局部 Q 网络的 value-based 执行拓扑。"""
 
     def __init__(self, observation_dim: int, action_dim: int, hidden_dim: int) -> None:
         super().__init__()
@@ -198,6 +251,7 @@ class SharedDiscreteQPolicy(nn.Module):
         deterministic: bool = True,
         action_mask: Tensor | None = None,
     ) -> MARLModelOutput:
+        del deterministic
         q_values = self.q_values(observations)
         if action_mask is not None:
             if action_mask.shape != q_values.shape:

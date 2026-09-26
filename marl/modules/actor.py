@@ -7,20 +7,24 @@ from marl.modules.action_head import ActionHeadOutput, BaseActionHead, DiscreteA
 
 
 class Actor(nn.Module):
-    """组合 Backbone 与动作头；算法只需决定用哪种组合。
-    J(θ)=Es​[Qϕ​(s,πθ​(s))]
-    在接受观测后使用自己的policy得到动作action
+    """单智能体策略网络：``observation -> backbone -> action head``。
+
+    Actor 不知道智能体数量和参数共享关系；这些多智能体拓扑由
+    :mod:`marl.modules.policy` 负责。输入 ``[..., O]``，输出动作、log-prob、
+    entropy 和分布参数；循环骨干的下一 hidden state 放在分布参数中。
     """
 
     def __init__(self, backbone: BaseBackbone, action_head: BaseActionHead) -> None:
         super().__init__()
         self.backbone, self.action_head = backbone, action_head
 
-    """
-    Backbone（骨干网络）：负责从原始输入中提取基础特征，是模型的主体。
-    Neck（颈部网络）：负责对 Backbone 提取的特征进行进一步融合、增强或多尺度处理。
-    Head（任务头）：负责将特征
-    """
+    @staticmethod
+    def _attach_hidden_state(
+        result: ActionHeadOutput, hidden_state: Tensor | None
+    ) -> ActionHeadOutput:
+        if hidden_state is not None:
+            result.distribution_params["hidden_state"] = hidden_state
+        return result
 
     def forward(
         self,
@@ -31,17 +35,32 @@ class Actor(nn.Module):
         hidden_state: Tensor | None = None,
         **backbone_kwargs: Tensor,
     ) -> ActionHeadOutput:
-        """
-        输出Action
-        """
+        """采样或确定性选择一个动作。"""
+
         encoded = self.backbone.forward(
             observations, hidden_state=hidden_state, **backbone_kwargs
-        ) 
+        )
         result = self.action_head.forward(encoded.features, deterministic, action_mask)
-        # 循环策略的状态放入分布参数，采样器无需依赖某个具体 Backbone 类型。
-        if encoded.hidden_state is not None:
-            result.distribution_params["hidden_state"] = encoded.hidden_state
-        return result
+        return self._attach_hidden_state(result, encoded.hidden_state)
+
+    def evaluate_actions(
+        self,
+        observations: Tensor,
+        actions: Tensor,
+        *,
+        action_mask: Tensor | None = None,
+        hidden_state: Tensor | None = None,
+        **backbone_kwargs: Tensor,
+    ) -> ActionHeadOutput:
+        """在同一 Actor 中评估给定动作，供 PPO 等 on-policy 目标使用。"""
+
+        encoded = self.backbone.forward(
+            observations, hidden_state=hidden_state, **backbone_kwargs
+        )
+        result = self.action_head.evaluate_actions(
+            encoded.features, actions, action_mask
+        )
+        return self._attach_hidden_state(result, encoded.hidden_state)
 
     def discrete_logits(
         self,

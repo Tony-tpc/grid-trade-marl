@@ -10,13 +10,13 @@ from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import EnvironmentSpec
+from marl.modules.policy import IndependentDiscretePolicy
 from marl.objectives import (
     EntropyObjective,
     LossBundle,
     PPOClipObjective,
     ValueMSEObjective,
 )
-from marl.policies import IndependentDiscretePolicy
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
 

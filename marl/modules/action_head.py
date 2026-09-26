@@ -26,6 +26,18 @@ class BaseActionHead(nn.Module, ABC):
     ) -> ActionHeadOutput:
         """从特征构造动作分布并采样。"""
 
+    def evaluate_actions(
+        self,
+        features: Tensor,
+        actions: Tensor,
+        action_mask: Tensor | None = None,
+    ) -> ActionHeadOutput:
+        """评估给定动作；不支持该能力的动作头应显式报错。"""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} 不支持 evaluate_actions"
+        )
+
 
 class DiscreteActionHead(BaseActionHead):
     """带非法动作 mask 的分类动作头。"""
@@ -54,6 +66,26 @@ class DiscreteActionHead(BaseActionHead):
         actions = logits.argmax(dim=-1) if deterministic else distribution.sample()
         return ActionHeadOutput(
             actions, distribution.log_prob(actions), distribution.entropy(), {"logits": logits}
+        )
+
+    def evaluate_actions(
+        self,
+        features: Tensor,
+        actions: Tensor,
+        action_mask: Tensor | None = None,
+    ) -> ActionHeadOutput:
+        """返回给定离散动作的 log-prob 和 entropy，不重新采样。"""
+
+        logits = self.logits(features, action_mask)
+        if actions.shape != logits.shape[:-1]:
+            raise ValueError("离散 actions 形状必须等于 logits 去掉动作维后的形状")
+        distribution = Categorical(logits=logits, validate_args=False)
+        selected = actions.long()
+        return ActionHeadOutput(
+            selected,
+            distribution.log_prob(selected),
+            distribution.entropy(),
+            {"logits": logits},
         )
 
 

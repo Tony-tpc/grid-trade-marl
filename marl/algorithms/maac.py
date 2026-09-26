@@ -14,13 +14,13 @@ from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec
 from marl.modules.critic import AttentionCritic
+from marl.modules.policy import IndependentDiscretePolicy
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
     LossBundle,
     TDLossObjective,
 )
-from marl.policies import IndependentDiscretePolicy
 from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
 from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
 from marl.returns import TD0Estimator
