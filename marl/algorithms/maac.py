@@ -14,7 +14,7 @@ from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
 from marl.modules.critic import AttentionQConfig, AttentionQNetwork
-from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
+from marl.modules.policy import AgentLogitsPolicy, DiscretePolicy, IndependentDiscreteConfig
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
@@ -161,23 +161,37 @@ class MAAC(BaseMARLAlgorithm):
         return LossBundle.combine((critic_result,))
 
     def compute_actor_loss_bundle(
-        self, batch: MARLBatch, agent_index: int
+        self,
+        batch: MARLBatch,
+        agent_index: int,
+        *,
+        current_q_values: Tensor | None = None,
     ) -> LossBundle:
         """只构建一个智能体的 policy loss；其他 actor 不接收梯度。"""
 
         self._validate_training_batch(batch)
         if not 0 <= agent_index < self.spec.num_agents:
             raise IndexError("agent_index 超出智能体范围")
-        assert batch.actions is not None
-        with torch.no_grad():
-            current_actions = self.policy.act(
+        if current_q_values is None:
+            with torch.no_grad():
+                current_actions = self.policy.act(
+                    batch.observations,
+                    action_mask=batch.action_mask,
+                ).actions
+                current_q_values = self.critic(
+                    batch.observations, current_actions
+                )
+        if isinstance(self.policy, AgentLogitsPolicy):
+            selected_logits = self.policy.logits_for_agent(
                 batch.observations,
-                action_mask=batch.action_mask,
-            ).actions
-            q_all = self.critic(batch.observations, current_actions)
-        logits = self.policy.logits(batch.observations, batch.action_mask)
-        selected_logits = logits[..., agent_index, :]
-        selected_q = q_all[..., agent_index, :]
+                agent_index,
+                batch.action_mask,
+            )
+        else:
+            selected_logits = self.policy.logits(
+                batch.observations, batch.action_mask
+            )[..., agent_index, :]
+        selected_q = current_q_values[..., agent_index, :]
         actor_result = self.policy_objective(selected_logits, selected_q)
         entropy = Categorical(
             logits=selected_logits, validate_args=False
@@ -203,9 +217,19 @@ class MAAC(BaseMARLAlgorithm):
         runtime.record_optimizer_step()
         actor_totals: dict[str, Tensor] = {}
         actor_norms: list[Tensor] = []
+        with torch.no_grad():
+            current_actions = self.policy.act(
+                batch.observations,
+                action_mask=batch.action_mask,
+            ).actions
+            current_q_values = self.critic(batch.observations, current_actions)
         for agent_index in range(self.spec.num_agents):
             with runtime.autocast(device):
-                actor = self.compute_actor_loss_bundle(batch, agent_index)
+                actor = self.compute_actor_loss_bundle(
+                    batch,
+                    agent_index,
+                    current_q_values=current_q_values,
+                )
             actor_norms.append(
                 self.optimize(
                     runtime.optimizer("actor"),

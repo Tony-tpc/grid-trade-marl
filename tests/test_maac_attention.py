@@ -6,7 +6,9 @@ from torch import nn
 from marl.algorithms import MAAC, MAACConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.experiment import build_experiment
 from marl.modules import AttentionCritic
+from marl.modules.policy import AgentLogitsPolicy
 from marl.objectives import CounterfactualPolicyObjective
 
 
@@ -108,3 +110,41 @@ def test_attention_critic_validates_joint_shapes_early() -> None:
         assert "observations" in str(error)
     else:
         raise AssertionError("错误智能体维应被拒绝")
+
+
+def test_single_agent_logits_fast_path_matches_full_policy_logits() -> None:
+    algorithm = MAAC(_spec(), MAACConfig())
+    observations = torch.randn(5, 2, 3)
+    action_mask = torch.ones(5, 2, 4, dtype=torch.bool)
+
+    full = algorithm.policy.logits(observations, action_mask)
+    assert isinstance(algorithm.policy, AgentLogitsPolicy)
+    selected = torch.stack(
+        [
+            algorithm.policy.logits_for_agent(observations, index, action_mask)
+            for index in range(2)
+        ],
+        dim=-2,
+    )
+
+    torch.testing.assert_close(selected, full)
+
+
+def test_maac_update_reuses_one_actor_q_context() -> None:
+    experiment = build_experiment(_spec(), MAACConfig())
+    algorithm = experiment.algorithm
+    assert isinstance(algorithm, MAAC)
+    calls = 0
+
+    def count_forward(_module, _inputs, _output) -> None:
+        nonlocal calls
+        calls += 1
+
+    handle = algorithm.get_submodule("critic").register_forward_hook(count_forward)
+    try:
+        experiment.trainer.update_batch(_batch())
+    finally:
+        handle.remove()
+
+    # 一次 replay critic loss + 一次全部 actor 共享的当前联合动作 Q。
+    assert calls == 2

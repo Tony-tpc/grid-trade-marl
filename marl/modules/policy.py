@@ -46,6 +46,18 @@ class DiscretePolicy(PolicyTopology, Protocol):
 
 
 @runtime_checkable
+class AgentLogitsPolicy(Protocol):
+    """可选的单智能体 logits 快速路径；外部策略无需强制实现。"""
+
+    def logits_for_agent(
+        self,
+        observations: Tensor,
+        agent_index: int,
+        action_mask: Tensor | None = None,
+    ) -> Tensor: ...
+
+
+@runtime_checkable
 class LocalQPolicy(PolicyTopology, Protocol):
     def q_values(self, observations: Tensor) -> Tensor: ...
 
@@ -113,6 +125,24 @@ class IndependentDiscretePolicy(nn.Module):
                 action_mask=self._mask_for(action_mask, index),
             ))
         return torch.stack(logits, dim=-2)
+
+    def logits_for_agent(
+        self,
+        observations: Tensor,
+        agent_index: int,
+        action_mask: Tensor | None = None,
+    ) -> Tensor:
+        """只执行目标智能体 Actor，返回 ``[*B,A]`` logits。"""
+
+        self._validate(observations, action_mask)
+        if not 0 <= agent_index < self.num_agents:
+            raise IndexError("agent_index 超出智能体范围")
+        actor = self.actors[agent_index]
+        assert isinstance(actor, Actor)
+        return actor.discrete_logits(
+            observations[..., agent_index, :],
+            action_mask=self._mask_for(action_mask, agent_index),
+        )
 
     def act(
         self,
