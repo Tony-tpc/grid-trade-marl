@@ -3,25 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
-from torch import Tensor, nn
+from torch import Tensor
 
-from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
 from marl.modules.critic import CentralizedValueConfig, ValueNetwork
-from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig, IndependentDiscretePolicy
+from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
 from marl.objectives import (
     EntropyObjective,
     LossBundle,
     PPOClipObjective,
     ValueMSEObjective,
 )
-from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
-from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
 from marl.returns import GAEConfig
 from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
 
@@ -52,90 +49,28 @@ class MAPPOConfig:
     update: PPOUpdateConfig = PPOUpdateConfig()
 
 
-    def build(self, spec: EnvironmentSpec) -> MAPPO:
-        """在此处直接查看 MAPPO 的完整组件组合。"""
+    def validate(self, spec: EnvironmentSpec) -> None:
+        if self.schema_version != 1 or self.algorithm != "mappo":
+            raise ValueError("MAPPO config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAPPO 不支持当前动作类型")
-        return MAPPO(
-            spec, self.policy.build(spec), self.critic.build(spec),
-            PPOClipObjective(self.loss.clip_ratio),
-            ValueMSEObjective(self.loss.value_coefficient),
-            EntropyObjective(self.loss.entropy_coefficient),
-        )
 
-
-def default_mappo_recipe() -> AlgorithmRecipe:
-    return AlgorithmRecipe(
-        schema_version=1,
-        algorithm="mappo",
-        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 128}),
-        critic=ComponentRecipe("centralized_value", {"hidden_dim": 128}),
-        objectives=(
-            ComponentRecipe("ppo_clip", {"clip_ratio": 0.2}),
-            ComponentRecipe("value_mse", {"coefficient": 0.5}),
-            ComponentRecipe("entropy", {"coefficient": 0.01}),
-        ),
-        returns=ComponentRecipe(
-            "gae",
-            {"gamma": 0.99, "lambda": 0.95, "normalize_advantage": True},
-        ),
-        experience=ComponentRecipe("rollout", {}),
-        update=ComponentRecipe(
-            "ppo_update",
-            {
-                "learning_rate": 3e-4,
-                "epochs": 4,
-                "mini_batch_size": 256,
-                "max_grad_norm": 10.0,
-            },
-        ),
-        target_update=ComponentRecipe("none", {}),
-    )
+    def build(self, spec: EnvironmentSpec) -> MAPPO:
+        return MAPPO(spec, self)
 
 
 class MAPPO(BaseMARLAlgorithm):
     """只负责 MAPPO 前向语义的薄装配类。"""
 
-    def __init__(
-        self,
-        spec: EnvironmentSpec,
-        policy: DiscretePolicy,
-        critic: ValueNetwork,
-        policy_objective: PPOClipObjective,
-        value_objective: ValueMSEObjective,
-        entropy_objective: EntropyObjective,
-        compiled_recipe: CompiledRecipe | None = None,
-    ) -> None:
+    def __init__(self, spec: EnvironmentSpec, config: MAPPOConfig) -> None:
         super().__init__(spec)
-        self.policy = policy
-        self.critic = critic
-        self.policy_objective = policy_objective
-        self.value_objective = value_objective
-        self.entropy_objective = entropy_objective
-        self.compiled_recipe = compiled_recipe
-
-    @classmethod
-    def from_recipe(
-        cls,
-        spec: EnvironmentSpec,
-        recipe: AlgorithmRecipe,
-        *,
-        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
-    ) -> MAPPO:
-        parts = assemble_algorithm_components("mappo", spec, recipe, registry)
-        if not isinstance(parts.policy, IndependentDiscretePolicy):
-            raise TypeError("MAPPO policy 必须实现 IndependentDiscretePolicy")
-        if not isinstance(parts.critic, nn.Module):
-            raise TypeError("MAPPO critic 必须是 nn.Module")
-        return cls(
-            spec,
-            parts.policy,
-            parts.critic,
-            cast(PPOClipObjective, require_one(parts.objectives, PPOClipObjective, "MAPPO")),
-            cast(ValueMSEObjective, require_one(parts.objectives, ValueMSEObjective, "MAPPO")),
-            cast(EntropyObjective, require_one(parts.objectives, EntropyObjective, "MAPPO")),
-            parts.compiled,
-        )
+        config.validate(spec)
+        self.config = config
+        self.policy = config.policy.build(spec)
+        self.critic = config.critic.build(spec)
+        self.policy_objective = PPOClipObjective(config.loss.clip_ratio)
+        self.value_objective = ValueMSEObjective(config.loss.value_coefficient)
+        self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
 
     def _critic_input(self, batch: MARLBatch) -> Tensor:
         return batch.state if batch.state is not None else batch.observations.flatten(-2)

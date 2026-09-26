@@ -6,7 +6,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
@@ -16,11 +16,7 @@ from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec, Transition
 from marl.objectives import LossBundle
 from marl.runtime import TensorReplayBuffer
-
-if TYPE_CHECKING:
-    from marl.recipes import AlgorithmRecipe
-    from marl.registry import ComponentRegistry
-    from marl.target_updates import TargetUpdate
+from marl.target_updates import TargetUpdate
 
 
 class OffPolicyAlgorithm(Protocol):
@@ -60,16 +56,6 @@ class OffPolicyUpdateConfig:
             raise ValueError("max_grad_norm 必须大于 0 或为 None")
         if self.amp_dtype not in (None, torch.bfloat16):
             raise ValueError("amp_dtype 目前只支持 torch.bfloat16")
-
-
-@dataclass(frozen=True, slots=True)
-class OffPolicyOptimizerConfig:
-    learning_rate: float = 3e-4
-    update: OffPolicyUpdateConfig = OffPolicyUpdateConfig()
-
-    def __post_init__(self) -> None:
-        if self.learning_rate <= 0.0:
-            raise ValueError("learning_rate 必须大于 0")
 
 
 class OffPolicyUpdatePlan:
@@ -162,7 +148,6 @@ class OffPolicyTrainer:
         update_plan: OffPolicyUpdatePlan,
         *,
         device: torch.device | str = "cpu",
-        recipe: AlgorithmRecipe | None = None,
         config_data: Mapping[str, object] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
@@ -172,71 +157,8 @@ class OffPolicyTrainer:
         self.replay_config = replay_config
         self.update_plan = update_plan
         self.device = torch.device(device)
-        self.recipe = recipe
         self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
         self.rng = rng or np.random.default_rng()
-
-    @classmethod
-    def from_recipe(
-        cls,
-        spec: EnvironmentSpec,
-        algorithm: OffPolicyAlgorithm,
-        recipe: AlgorithmRecipe,
-        *,
-        device: torch.device | str = "cpu",
-        registry: ComponentRegistry | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> OffPolicyTrainer:
-        from marl.recipes import compile_recipe
-        from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentKind
-
-        selected = DEFAULT_COMPONENT_REGISTRY if registry is None else registry
-        compile_recipe(recipe, spec, registry=selected)
-        replay_config = cast(
-            ReplayConfig,
-            selected.build(
-                ComponentKind.EXPERIENCE_SOURCE,
-                recipe.experience.type,
-                recipe.experience.options,
-                spec,
-            ),
-        )
-        optimizer_config = cast(
-            OffPolicyOptimizerConfig,
-            selected.build(
-                ComponentKind.UPDATE_PLAN,
-                recipe.update.type,
-                recipe.update.options,
-                spec,
-            ),
-        )
-        target_update = cast(
-            "TargetUpdate",
-            selected.build(
-                ComponentKind.TARGET_UPDATE,
-                recipe.target_update.type,
-                recipe.target_update.options,
-                spec,
-            ),
-        )
-        trainable_parameters = tuple(
-            parameter for parameter in algorithm.parameters() if parameter.requires_grad
-        )
-        if not trainable_parameters:
-            raise ValueError("algorithm 没有可训练参数")
-        optimizer = torch.optim.Adam(
-            trainable_parameters, lr=optimizer_config.learning_rate
-        )
-        return cls(
-            spec,
-            algorithm,
-            TensorReplayBuffer(spec, replay_config.capacity),
-            replay_config,
-            OffPolicyUpdatePlan(optimizer, optimizer_config.update, target_update),
-            device=device,
-            recipe=recipe,
-            rng=rng,
-        )
 
     @property
     def ready(self) -> bool:
@@ -261,25 +183,22 @@ class OffPolicyTrainer:
         return self.update_plan.update(self.algorithm, batch.to(self.device))
 
     def state_dict(self) -> dict[str, Any]:
-        from marl.recipes import recipe_to_dict
-
         return {
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
             "config": deepcopy(self.config_data),
+            "torch_rng": torch.get_rng_state().clone(),
+            "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             "update_plan": self.update_plan.state_dict(),
             "replay": self.replay.state_dict(),
-            "recipe": recipe_to_dict(self.recipe) if self.recipe is not None else None,
             "rng": deepcopy(self.rng.bit_generator.state),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        from marl.recipes import recipe_to_dict
-
         if state.get("config") != self.config_data:
             raise ValueError("checkpoint config 与当前 trainer config 不一致")
-        current_recipe = recipe_to_dict(self.recipe) if self.recipe is not None else None
-        if state.get("recipe") != current_recipe:
-            raise ValueError("checkpoint recipe 与当前 trainer recipe 不一致")
+        torch.set_rng_state(state["torch_rng"].cpu())
+        if state["cuda_rng"] is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
         self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))
         self.replay.load_state_dict(cast(dict[str, object], state["replay"]))

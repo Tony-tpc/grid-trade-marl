@@ -1,41 +1,33 @@
-# QMIX 完整算法 recipe；仅适用于离散动作和共享团队奖励。
-schema_version: 1
-algorithm: qmix
+# QMIX 完整默认配置；以下值与 Python QMIXConfig() 一致。
+# 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
+schema_version: 1  # 必填；配置版本，只允许整数 1。
+algorithm: qmix  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
-  type: shared_discrete_q  # 所有同构智能体共享局部 Q 网络。
-  options:
-    hidden_dim: 128  # 可选，默认 128；局部 Q 网络隐藏维度。
+  kind: shared_discrete_q  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
-critic:
-  type: qmix_mixer  # 使用全局 state 将 agent Q 单调混合为 Q_tot。
-  options:
-    mixing_dim: 32  # 可选，默认 32；hypernetwork/mixer 隐藏维度。
+mixer:
+  kind: qmix_mixer  # 可选；组件实现名称，默认值如本行。
+  mixing_dim: 32  # 可选；QMIX 混合网络宽度，必须 > 0。
 
-objectives:
-  - type: td_mse
-    options:
-      coefficient: 1.0  # 可选，默认 1.0；Q_tot TD loss 权重。
+loss:
+  td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。
 
-returns:
-  type: td0
-  options:
-    gamma: 0.99  # 可选，默认 0.99。
+value_target:
+  kind: td0  # 可选；组件实现名称，默认值如本行。
+  gamma: 0.99  # 可选；折扣因子，范围 [0,1]。
 
-experience:
-  type: replay
-  options:
-    capacity: 100000  # 可选，默认 100000。
-    batch_size: 256  # 可选，默认 256。
+replay:
+  capacity: 100000  # 可选；replay 容量，必须 >= 1。
+  batch_size: 256  # 可选；每次 replay 采样量，1 <= batch_size <= capacity。
 
 update:
-  type: off_policy_update
-  options:
-    learning_rate: 0.0003  # 可选，默认 0.0003。
-    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭。
-    amp_dtype: null  # 可选，默认 null；可设 bf16。
+  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
+  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。
+  amp_dtype: null  # 可选；null 使用 FP32；bf16 需要支持 BF16 的 CUDA。
 
 target_update:
-  type: soft
-  options:
-    tau: 0.005  # 可选，默认 0.005；也可改用 hard + interval。
+  kind: soft  # 可选；组件实现名称，默认值如本行。
+  tau: 0.005  # 可选；Polyak 更新系数，范围 (0,1]。
+# target_update 也可整节替换为 {kind: hard, interval: 1}；interval 是正整数。

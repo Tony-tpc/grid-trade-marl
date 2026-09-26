@@ -1,43 +1,33 @@
-# MADDPG 完整算法 recipe；连续确定性动作、个体奖励、off-policy replay。
-schema_version: 1
-algorithm: maddpg
+# MADDPG 完整默认配置；以下值与 Python MADDPGConfig() 一致。
+# 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
+schema_version: 1  # 必填；配置版本，只允许整数 1。
+algorithm: maddpg  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
-  type: independent_deterministic  # 每个智能体独立的确定性连续 Actor。
-  options:
-    hidden_dim: 128  # 可选，默认 128；Actor 隐藏维度。
+  kind: independent_deterministic  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
 critic:
-  type: independent_centralized_q  # 每个智能体一个独立的集中式 Q_i。
-  options:
-    hidden_dim: 128  # 可选，默认 128；每个 Critic 隐藏维度。
+  kind: independent_centralized_q  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
-objectives:
-  - type: td_mse
-    options:
-      coefficient: 1.0  # 可选，默认 1.0；critic loss 权重。
-  - type: deterministic_policy  # 最大化当前联合动作下的逐智能体 Q_i。
-    options: {}  # 没有可选字段。
+loss:
+  td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。
 
-returns:
-  type: td0
-  options:
-    gamma: 0.99  # 可选，默认 0.99；一步 TD 折扣因子。
+value_target:
+  kind: td0  # 可选；组件实现名称，默认值如本行。
+  gamma: 0.99  # 可选；折扣因子，范围 [0,1]。
 
-experience:
-  type: replay
-  options:
-    capacity: 100000  # 可选，默认 100000。
-    batch_size: 256  # 可选，默认 256。
+replay:
+  capacity: 100000  # 可选；replay 容量，必须 >= 1。
+  batch_size: 256  # 可选；每次 replay 采样量，1 <= batch_size <= capacity。
 
 update:
-  type: off_policy_update
-  options:
-    learning_rate: 0.0003  # 可选，默认 0.0003。
-    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭。
-    amp_dtype: null  # 可选，默认 null；可设 bf16。
+  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
+  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。
+  amp_dtype: null  # 可选；null 使用 FP32；bf16 需要支持 BF16 的 CUDA。
 
 target_update:
-  type: soft
-  options:
-    tau: 0.005  # 可选，默认 0.005；范围 (0, 1]。
+  kind: soft  # 可选；组件实现名称，默认值如本行。
+  tau: 0.005  # 可选；Polyak 更新系数，范围 (0,1]。
+# target_update 也可整节替换为 {kind: hard, interval: 1}；interval 是正整数。

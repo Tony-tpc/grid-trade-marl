@@ -1,4 +1,4 @@
-"""使用安全 YAML recipe 运行完整 MAPPO rollout/GAE/PPO 更新。
+"""使用安全 YAML config 运行完整 MAPPO rollout/GAE/PPO 更新。
 
 该示例仍使用合成的 P2P 电能交易曲线，只用于验证通用训练链，不代表论文复现结果。
 """
@@ -10,17 +10,17 @@ from pathlib import Path
 
 import torch
 
-from marl.algorithms import MAPPO
-from marl.envs import build_energy_trading_adapter, load_environment_recipe
-from marl.recipes import load_algorithm_recipe
+from marl.algorithms import MAPPOConfig
+from marl.config import load_algorithm_config
+from marl.envs import build_energy_trading_adapter, load_environment_config
+from marl.experiment import build_experiment
 from marl.runtime import SyncVectorEnv, resolve_device
-from marl.training import OnPolicyTrainer
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="组合式 MAPPO YAML recipe 示例")
+    parser = argparse.ArgumentParser(description="组合式 MAPPO YAML config 示例")
     parser.add_argument(
-        "--recipe",
+        "--config",
         type=Path,
         default=Path(__file__).parent / "configs" / "algorithms" / "mappo.yaml",
     )
@@ -43,23 +43,21 @@ def main() -> None:
         parser.error("rounds 和 num-envs 必须大于 0")
 
     torch.manual_seed(args.seed)
-    environment_recipe = load_environment_recipe(args.environment)
+    environment_config = load_environment_config(args.environment)
     environment = SyncVectorEnv(
         [
-            build_energy_trading_adapter(environment_recipe)
+            build_energy_trading_adapter(environment_config)
             for _ in range(args.num_envs)
         ]
     )
-    recipe = load_algorithm_recipe(args.recipe)
+    config = load_algorithm_config(args.config)
     device = resolve_device(args.device)
-    algorithm = MAPPO.from_recipe(environment.spec, recipe).to(device)
-    trainer = OnPolicyTrainer.from_recipe(
-        environment,
-        algorithm,
-        recipe,
-        device=device,
-        generator=torch.Generator().manual_seed(args.seed),
+    if not isinstance(config, MAPPOConfig):
+        parser.error("--config 必须选择 MAPPO 配置")
+    experiment = build_experiment(
+        environment, config, device=device, seed=args.seed,
     )
+    trainer = experiment.trainer
 
     for round_index in range(args.rounds):
         seeds = [args.seed + round_index * args.num_envs + i for i in range(args.num_envs)]

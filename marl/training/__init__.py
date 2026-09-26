@@ -2,7 +2,6 @@
 
 from marl.training.off_policy import (
     OffPolicyAlgorithm,
-    OffPolicyOptimizerConfig,
     OffPolicyTrainer,
     OffPolicyUpdateConfig,
     OffPolicyUpdatePlan,
@@ -21,7 +20,6 @@ from marl.training.on_policy import (
 __all__ = [
     "LossComputingModule",
     "OffPolicyAlgorithm",
-    "OffPolicyOptimizerConfig",
     "OffPolicyTrainer",
     "OffPolicyUpdateConfig",
     "OffPolicyUpdatePlan",

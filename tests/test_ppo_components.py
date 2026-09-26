@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from torch.distributions import Categorical
 
-from marl.algorithms import MAPPO, default_mappo_recipe
+from marl.algorithms import MAPPO, MAPPOConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.objectives import (
@@ -84,7 +84,7 @@ def test_extracted_objectives_match_mappo_bundle() -> None:
     spec = EnvironmentSpec(
         2, 3, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.INDIVIDUAL
     )
-    algorithm = MAPPO.from_recipe(spec, default_mappo_recipe())
+    algorithm = MAPPO(spec, MAPPOConfig())
     observations = torch.randn(5, 2, 3)
     state = torch.randn(5, 6)
     actions = torch.randint(0, 4, (5, 2))

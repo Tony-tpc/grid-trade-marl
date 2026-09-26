@@ -1,48 +1,32 @@
-# 一份文件只描述一个完整算法；algorithm 是类型校验标签，不是单独切换算法的开关。
-schema_version: 1  # 必填；算法 recipe 格式版本。
-algorithm: mappo  # 必填；必须与 MAPPO.from_recipe() 一致。
+# MAPPO 完整默认配置；以下值与 Python MAPPOConfig() 一致。
+# 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
+schema_version: 1  # 必填；配置版本，只允许整数 1。
+algorithm: mappo  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
-policy:  # 必填；把逐智能体局部观测映射为动作分布。
-  type: independent_discrete  # 每个智能体拥有独立的离散 MLP Actor。
-  options:  # options 本身可省略；下列是该 policy 的全部可选字段。
-    hidden_dim: 64  # 可选，默认 128；每个 Actor 隐藏特征维度，必须 > 0。
+policy:
+  kind: independent_discrete  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
-critic:  # 必填；集中训练时根据全局 state 输出每个智能体的 V_i。
-  type: centralized_value
-  options:
-    hidden_dim: 64  # 可选，默认 128；集中式 value 网络隐藏维度。
+critic:
+  kind: centralized_value  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
-objectives:  # 必填且不能为空；MAPPO 必须各包含以下一种目标。
-  - type: ppo_clip  # clipped surrogate policy objective。
-    options:
-      clip_ratio: 0.2  # 可选，默认 0.2；importance ratio 的对称裁剪宽度。
-  - type: value_mse  # 逐智能体 return 与 V_i 的均方误差。
-    options:
-      coefficient: 0.5  # 可选，默认 0.5；value loss 在总损失中的权重。
-  - type: entropy  # 用负熵鼓励策略探索。
-    options:
-      coefficient: 0.01  # 可选，默认 0.01；entropy bonus 权重。
+loss:
+  clip_ratio: 0.2  # 可选；PPO ratio 对称裁剪宽度，范围 (0,1)。
+  value_coefficient: 0.5  # 可选；value MSE 权重，必须 >= 0。
+  entropy_coefficient: 0.01  # 可选；探索熵权重，必须 >= 0。
 
-returns:  # 必填；从 fresh rollout 计算 advantage 和 return。
-  type: gae
-  options:  # 下列是 GAE 的全部可选字段。
-    gamma: 0.99  # 可选，默认 0.99；折扣因子，范围 [0, 1]。
-    lambda: 0.95  # 可选，默认 0.95；GAE lambda，范围 [0, 1]。
-    normalize_advantage: true  # 可选，默认 true；按 batch 标准化 advantage。
+advantage:
+  kind: gae  # 可选；组件实现名称，默认值如本行。
+  gamma: 0.99  # 可选；折扣因子，范围 [0,1]。
+  lambda: 0.95  # 可选；GAE 递推系数，范围 [0,1]。
+  normalize: true  # 可选；是否对 advantage 做 batch 标准化；return 不变。
 
-experience:  # 必填；MAPPO 只允许一次性 fresh rollout，不使用长期 replay。
-  type: rollout
-  options:
-    horizon: 48  # 可选，默认 null；null 表示使用环境 horizon，必须为正整数。
+rollout:
+  horizon: null  # 可选；null 使用环境 horizon，否则 1 <= horizon <= 环境 horizon。
 
-update:  # 必填；optimizer 和 PPO 多 epoch/mini-batch 调度。
-  type: ppo_update
-  options:  # 下列是 ppo_update 的全部可选字段。
-    learning_rate: 0.0003  # 可选，默认 0.0003；Adam 学习率，必须 > 0。
-    epochs: 2  # 可选，默认 4；同一 fresh rollout 的更新轮数，必须 >= 1。
-    mini_batch_size: 64  # 可选，默认 256；展平 rollout 后的 mini-batch 大小。
-    max_grad_norm: 10.0  # 可选，默认 10.0；设为 null 可关闭梯度裁剪。
-
-target_update:  # 必填；MAPPO 没有 target network。
-  type: none
-  options: {}  # none 没有可选字段；填写其他字段会被拒绝。
+update:
+  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
+  epochs: 4  # 可选；每份 fresh rollout 的更新轮数，必须 >= 1。
+  mini_batch_size: 256  # 可选；展平 [T,B] 后的 mini-batch 大小，必须 >= 1。
+  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。

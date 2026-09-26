@@ -4,27 +4,24 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 import torch
 from torch import Tensor, nn
 
-from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import TwinIndependentCentralizedCritics, TwinQConfig, TwinQEnsemble
-from marl.modules.policy import IndependentGaussianConfig, IndependentGaussianPolicy, PolicyTopology
+from marl.modules.critic import TwinQConfig, TwinQEnsemble
+from marl.modules.policy import IndependentGaussianConfig, PolicyTopology
 from marl.objectives import (
     LossBundle,
     ObjectiveResult,
     SACEntropyObjective,
     TDLossObjective,
 )
-from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
-from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
+from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
@@ -57,92 +54,31 @@ class MASACConfig:
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
-    def build(self, spec: EnvironmentSpec) -> MASAC:
-        """在此处直接查看 MASAC 的完整组件组合。"""
+    def validate(self, spec: EnvironmentSpec) -> None:
+        if self.schema_version != 1 or self.algorithm != "masac":
+            raise ValueError("MASAC config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.CONTINUOUS:
             raise ValueError("MASAC 不支持当前动作类型")
-        return MASAC(
-            spec, self.policy.build(spec), self.critic.build(spec),
-            TDLossObjective(self.loss.td_coefficient),
-            SACEntropyObjective(spec.num_agents, spec.action_dim,
-                                initial_alpha=self.loss.initial_alpha,
-                                target_entropy=self.loss.target_entropy),
-            self.value_target.build(),
-        )
 
-
-def default_masac_recipe() -> AlgorithmRecipe:
-    return AlgorithmRecipe(
-        schema_version=1,
-        algorithm="masac",
-        policy=ComponentRecipe("independent_gaussian", {"hidden_dim": 128}),
-        critic=ComponentRecipe(
-            "twin_independent_centralized_q", {"hidden_dim": 128}
-        ),
-        objectives=(
-            ComponentRecipe("td_mse", {"coefficient": 1.0}),
-            ComponentRecipe(
-                "sac_entropy", {"initial_alpha": 0.2, "target_entropy": None}
-            ),
-        ),
-        returns=ComponentRecipe("td0", {"gamma": 0.99}),
-        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {"learning_rate": 3e-4, "max_grad_norm": 10.0, "amp_dtype": None},
-        ),
-        target_update=ComponentRecipe("soft", {"tau": 0.005}),
-    )
+    def build(self, spec: EnvironmentSpec) -> MASAC:
+        return MASAC(spec, self)
 
 
 class MASAC(BaseMARLAlgorithm):
-    def __init__(
-        self,
-        spec: EnvironmentSpec,
-        policy: PolicyTopology,
-        critics: TwinQEnsemble,
-        td_loss: TDLossObjective,
-        entropy_objective: SACEntropyObjective,
-        return_estimator: ValueTargetEstimator,
-        compiled_recipe: CompiledRecipe | None = None,
-    ) -> None:
+    def __init__(self, spec: EnvironmentSpec, config: MASACConfig) -> None:
         super().__init__(spec)
-        self.policy = policy
-        self.critics = critics
-        self.target_critics = deepcopy(critics)
+        config.validate(spec)
+        self.config = config
+        self.policy = config.policy.build(spec)
+        self.critics = config.critic.build(spec)
+        self.target_critics = deepcopy(self.critics)
         self.get_submodule("target_critics").requires_grad_(False)
-        self.td_loss = td_loss
-        self.entropy_objective = entropy_objective
-        self.return_estimator = return_estimator
-        self.compiled_recipe = compiled_recipe
-
-    @classmethod
-    def from_recipe(
-        cls,
-        spec: EnvironmentSpec,
-        recipe: AlgorithmRecipe,
-        *,
-        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
-    ) -> MASAC:
-        parts = assemble_algorithm_components("masac", spec, recipe, registry)
-        if not isinstance(parts.policy, IndependentGaussianPolicy):
-            raise TypeError("MASAC policy 必须是 IndependentGaussianPolicy")
-        if not isinstance(parts.critic, TwinIndependentCentralizedCritics):
-            raise TypeError("MASAC critic 必须是 TwinIndependentCentralizedCritics")
-        if not isinstance(parts.returns, TD0Estimator):
-            raise TypeError("MASAC returns 必须是 TD0Estimator")
-        return cls(
-            spec,
-            parts.policy,
-            parts.critic,
-            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MASAC")),
-            cast(
-                SACEntropyObjective,
-                require_one(parts.objectives, SACEntropyObjective, "MASAC"),
-            ),
-            parts.returns,
-            parts.compiled,
+        self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.entropy_objective = SACEntropyObjective(
+            spec.num_agents, spec.action_dim,
+            initial_alpha=config.loss.initial_alpha, target_entropy=config.loss.target_entropy,
         )
+        self.return_estimator: ValueTargetEstimator = config.value_target.build()
 
     @staticmethod
     def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:

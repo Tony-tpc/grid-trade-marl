@@ -9,20 +9,18 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 import torch
 from torch import Tensor, nn
 
-from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import IndependentCentralizedCritics, IndependentQConfig, QEnsemble
+from marl.modules.critic import IndependentQConfig, QEnsemble
 from marl.modules.policy import (
     IndependentDeterministicConfig,
-    IndependentDeterministicPolicy,
     PolicyTopology,
 )
 from marl.objectives import (
@@ -30,9 +28,7 @@ from marl.objectives import (
     LossBundle,
     TDLossObjective,
 )
-from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
-from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
+from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.gradients import frozen_parameters
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
@@ -61,36 +57,14 @@ class MADDPGConfig:
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
-    def build(self, spec: EnvironmentSpec) -> MADDPG:
-        """在此处直接查看 MADDPG 的完整组件组合。"""
+    def validate(self, spec: EnvironmentSpec) -> None:
+        if self.schema_version != 1 or self.algorithm != "maddpg":
+            raise ValueError("MADDPG config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.CONTINUOUS:
             raise ValueError("MADDPG 不支持当前动作类型")
-        return MADDPG(
-            spec, self.policy.build(spec), self.critic.build(spec),
-            TDLossObjective(self.loss.td_coefficient),
-            DeterministicPolicyObjective(),
-            self.value_target.build(),
-        )
 
-
-def default_maddpg_recipe() -> AlgorithmRecipe:
-    return AlgorithmRecipe(
-        schema_version=1,
-        algorithm="maddpg",
-        policy=ComponentRecipe("independent_deterministic", {"hidden_dim": 128}),
-        critic=ComponentRecipe("independent_centralized_q", {"hidden_dim": 128}),
-        objectives=(
-            ComponentRecipe("td_mse", {"coefficient": 1.0}),
-            ComponentRecipe("deterministic_policy", {}),
-        ),
-        returns=ComponentRecipe("td0", {"gamma": 0.99}),
-        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {"learning_rate": 3e-4, "max_grad_norm": 10.0, "amp_dtype": None},
-        ),
-        target_update=ComponentRecipe("soft", {"tau": 0.005}),
-    )
+    def build(self, spec: EnvironmentSpec) -> MADDPG:
+        return MADDPG(spec, self)
 
 
 class MADDPG(BaseMARLAlgorithm):
@@ -101,55 +75,19 @@ class MADDPG(BaseMARLAlgorithm):
     不能把不同家庭/玩家的奖励平均。所有 Actor 的输入输出维度目前要求相同，
     但网络参数独立，可学习不同的博弈策略。
     """
-    def __init__(
-        self,
-        spec: EnvironmentSpec,
-        policy: PolicyTopology,
-        critics: QEnsemble,
-        td_loss: TDLossObjective,
-        policy_objective: DeterministicPolicyObjective,
-        return_estimator: ValueTargetEstimator,
-        compiled_recipe: CompiledRecipe | None = None,
-    ) -> None:
+    def __init__(self, spec: EnvironmentSpec, config: MADDPGConfig) -> None:
         super().__init__(spec)
-        self.policy = policy
-        self.critics = critics
-        self.target_policy = deepcopy(policy)
+        config.validate(spec)
+        self.config = config
+        self.policy = config.policy.build(spec)
+        self.critics = config.critic.build(spec)
+        self.target_policy = deepcopy(self.policy)
         self.get_submodule("target_policy").requires_grad_(False)
-        self.target_critics = deepcopy(critics)
+        self.target_critics = deepcopy(self.critics)
         self.get_submodule("target_critics").requires_grad_(False)
-        self.td_loss = td_loss
-        self.policy_objective = policy_objective
-        self.return_estimator = return_estimator
-        self.compiled_recipe = compiled_recipe
-
-    @classmethod
-    def from_recipe(
-        cls,
-        spec: EnvironmentSpec,
-        recipe: AlgorithmRecipe,
-        *,
-        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
-    ) -> MADDPG:
-        parts = assemble_algorithm_components("maddpg", spec, recipe, registry)
-        if not isinstance(parts.policy, IndependentDeterministicPolicy):
-            raise TypeError("MADDPG policy 必须是 IndependentDeterministicPolicy")
-        if not isinstance(parts.critic, IndependentCentralizedCritics):
-            raise TypeError("MADDPG critic 必须是 IndependentCentralizedCritics")
-        if not isinstance(parts.returns, TD0Estimator):
-            raise TypeError("MADDPG returns 必须是 TD0Estimator")
-        return cls(
-            spec,
-            parts.policy,
-            parts.critic,
-            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MADDPG")),
-            cast(
-                DeterministicPolicyObjective,
-                require_one(parts.objectives, DeterministicPolicyObjective, "MADDPG"),
-            ),
-            parts.returns,
-            parts.compiled,
-        )
+        self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.policy_objective = DeterministicPolicyObjective()
+        self.return_estimator: ValueTargetEstimator = config.value_target.build()
 
     @staticmethod
     def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:

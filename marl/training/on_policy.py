@@ -6,7 +6,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
@@ -15,12 +15,8 @@ from torch import Tensor, nn
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
 from marl.objectives import LossBundle
-from marl.returns import AdvantageEstimator, GAEEstimator
+from marl.returns import AdvantageEstimator
 from marl.runtime import SyncVectorEnv
-
-if TYPE_CHECKING:
-    from marl.recipes import AlgorithmRecipe
-    from marl.registry import ComponentRegistry
 
 
 class LossComputingModule(Protocol):
@@ -305,12 +301,17 @@ class PPOUpdatePlan:
     def state_dict(self) -> dict[str, Any]:
         return {
             "optimizer": deepcopy(self.optimizer.state_dict()),
+            "generator": self.generator.get_state().clone() if self.generator is not None else None,
             "update_count": self.update_count,
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         self.optimizer.load_state_dict(cast(dict[str, Any], state["optimizer"]))
         self.update_count = int(state["update_count"])
+        if state["generator"] is not None:
+            if self.generator is None:
+                self.generator = torch.Generator()
+            self.generator.set_state(state["generator"].cpu())
 
 
 class OnPolicyTrainer:
@@ -325,7 +326,6 @@ class OnPolicyTrainer:
         update_plan: PPOUpdatePlan,
         *,
         device: torch.device | str = "cpu",
-        recipe: AlgorithmRecipe | None = None,
         config_data: Mapping[str, object] | None = None,
     ) -> None:
         if rollout_horizon < 1 or rollout_horizon > environment.spec.horizon:
@@ -336,74 +336,7 @@ class OnPolicyTrainer:
         self.rollout_horizon = rollout_horizon
         self.update_plan = update_plan
         self.device = torch.device(device)
-        self.recipe = recipe
         self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
-
-    @classmethod
-    def from_recipe(
-        cls,
-        environment: SyncVectorEnv,
-        algorithm: OnPolicyActorCritic,
-        recipe: AlgorithmRecipe,
-        *,
-        device: torch.device | str = "cpu",
-        registry: ComponentRegistry | None = None,
-        generator: torch.Generator | None = None,
-    ) -> OnPolicyTrainer:
-        # 延迟导入防止训练组件与 recipe/内置工厂形成循环依赖。
-        from marl.builtins import PPOOptimizerConfig, RolloutConfig
-        from marl.recipes import compile_recipe
-        from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentKind
-
-        selected_registry = (
-            DEFAULT_COMPONENT_REGISTRY
-            if registry is None else registry
-        )
-        compile_recipe(recipe, environment.spec, registry=selected_registry)
-        estimator = cast(
-            GAEEstimator,
-            selected_registry.build(
-                ComponentKind.RETURN_ESTIMATOR,
-                recipe.returns.type,
-                recipe.returns.options,
-                environment.spec,
-            ),
-        )
-        rollout = cast(
-            RolloutConfig,
-            selected_registry.build(
-                ComponentKind.EXPERIENCE_SOURCE,
-                recipe.experience.type,
-                recipe.experience.options,
-                environment.spec,
-            ),
-        )
-        optimizer_config = cast(
-            PPOOptimizerConfig,
-            selected_registry.build(
-                ComponentKind.UPDATE_PLAN,
-                recipe.update.type,
-                recipe.update.options,
-                environment.spec,
-            ),
-        )
-        optimizer = torch.optim.Adam(
-            algorithm.parameters(), lr=optimizer_config.learning_rate
-        )
-        update_plan = PPOUpdatePlan(
-            optimizer,
-            optimizer_config.update,
-            generator=generator,
-        )
-        return cls(
-            environment,
-            algorithm,
-            estimator,
-            rollout.horizon or environment.spec.horizon,
-            update_plan,
-            device=device,
-            recipe=recipe,
-        )
 
     def _tensors(
         self, steps: Sequence[EnvironmentStep]
@@ -423,7 +356,7 @@ class OnPolicyTrainer:
             if any(step.action_mask is None for step in steps):
                 raise ValueError("离散环境的每个 step 都必须提供 action_mask")
             action_masks = torch.as_tensor(
-                np.stack([cast(np.ndarray, step.action_mask) for step in steps]),
+                np.stack([step.action_mask for step in steps if step.action_mask is not None]),
                 dtype=torch.bool,
                 device=self.device,
             )
@@ -484,24 +417,20 @@ class OnPolicyTrainer:
         return self.update_plan.update(self.algorithm, self.collect(seeds))
 
     def state_dict(self) -> dict[str, Any]:
-        from marl.recipes import recipe_to_dict
-
         return {
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
             "config": deepcopy(self.config_data),
+            "torch_rng": torch.get_rng_state().clone(),
+            "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             "update_plan": self.update_plan.state_dict(),
-            "recipe": recipe_to_dict(self.recipe) if self.recipe is not None else None,
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        from marl.recipes import recipe_to_dict
-
-        saved_recipe = state.get("recipe")
         if state.get("config") != self.config_data:
             raise ValueError("checkpoint config 与当前 trainer config 不一致")
-        current_recipe = recipe_to_dict(self.recipe) if self.recipe is not None else None
-        if saved_recipe != current_recipe:
-            raise ValueError("checkpoint recipe 与当前 trainer recipe 不一致")
+        torch.set_rng_state(state["torch_rng"].cpu())
+        if state["cuda_rng"] is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all([rng.cpu() for rng in state["cuda_rng"]])
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
         self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))
 

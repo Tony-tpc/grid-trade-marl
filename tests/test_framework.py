@@ -7,11 +7,11 @@ from marl.algorithms import (
     MASAC,
     QMIX,
     BaseMARLAlgorithm,
-    default_maac_recipe,
-    default_maddpg_recipe,
-    default_mappo_recipe,
-    default_masac_recipe,
-    default_qmix_recipe,
+    MAACConfig,
+    MADDPGConfig,
+    MAPPOConfig,
+    MASACConfig,
+    QMIXConfig,
 )
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
@@ -103,7 +103,7 @@ def test_all_algorithms_are_recipe_built_direct_base_subclasses() -> None:
     shared = EnvironmentSpec(
         agents, obs_dim, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.SHARED
     )
-    maac = MAAC.from_recipe(discrete, default_maac_recipe())
+    maac = MAAC(discrete, MAACConfig())
     maac_batch = MARLBatch(
         observations=observations,
         actions=torch.randint(0, 4, (batch_size, agents)),
@@ -121,11 +121,11 @@ def test_all_algorithms_are_recipe_built_direct_base_subclasses() -> None:
         terminated=flags,
         truncated=flags,
     )
-    maddpg = MADDPG.from_recipe(continuous, default_maddpg_recipe())
-    masac = MASAC.from_recipe(continuous, default_masac_recipe())
+    maddpg = MADDPG(continuous, MADDPGConfig())
+    masac = MASAC(continuous, MASACConfig())
     assert maddpg.compute_loss_bundle(continuous_batch).total.ndim == 0
     assert masac.compute_loss_bundle(continuous_batch).total.ndim == 0
-    mappo = MAPPO.from_recipe(discrete, default_mappo_recipe())
+    mappo = MAPPO(discrete, MAPPOConfig())
     mappo_batch = MARLBatch(
         observations=observations,
         actions=torch.randint(0, 4, (batch_size, agents)),
@@ -137,7 +137,7 @@ def test_all_algorithms_are_recipe_built_direct_base_subclasses() -> None:
         },
     )
     assert mappo.compute_loss_bundle(mappo_batch).total.ndim == 0
-    qmix = QMIX.from_recipe(shared, default_qmix_recipe())
+    qmix = QMIX(shared, QMIXConfig())
     qmix_batch = MARLBatch(
         observations=observations,
         actions=torch.randint(0, 4, (batch_size, agents)),

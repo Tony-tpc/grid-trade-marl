@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import torch
 from torch import Tensor, nn
@@ -53,7 +53,8 @@ class ValueCritic(nn.Module):
 
     def forward(self, inputs: Tensor, **backbone_kwargs: Tensor) -> Tensor:
         features = self.backbone.forward(inputs, **backbone_kwargs).features
-        return cast(Tensor, self.value_head(features).squeeze(-1))
+        values: Tensor = self.value_head(features).squeeze(-1)
+        return values
 
 
 class CentralizedCritic(nn.Module):
@@ -80,7 +81,8 @@ class CentralizedCritic(nn.Module):
         centralized_input -> backbone -> features -> value_head -> Q_value
         """
         features = self.backbone.forward(centralized_input, **backbone_kwargs).features
-        return cast(Tensor, self.value_head(features))
+        values: Tensor = self.value_head(features)
+        return values
 
 
 class IndependentCentralizedCritics(nn.Module):
@@ -160,7 +162,8 @@ class AttentionCritic(nn.Module):
                 need_weights=False,
             )
         q_values = self.q_head(torch.cat((own, context), dim=-1))
-        return cast(Tensor, q_values.reshape(*leading, agents, self.action_dim))
+        result: Tensor = q_values.reshape(*leading, agents, self.action_dim)
+        return result
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,9 +10,9 @@ from marl.algorithms import (
     MAAC,
     MASAC,
     QMIX,
-    default_maac_recipe,
-    default_masac_recipe,
-    default_qmix_recipe,
+    MAACConfig,
+    MASACConfig,
+    QMIXConfig,
 )
 from marl.envs import (
     ActionKind,
@@ -27,8 +27,10 @@ from marl.envs import (
     Transition,
     transitions_to_batch,
 )
-from marl.recipes import ComponentRecipe
-from marl.training import OffPolicyTrainer
+from marl.experiment import build_experiment
+from marl.modules.critic import AttentionQConfig
+from marl.modules.policy import IndependentDiscreteConfig
+from marl.training.off_policy import ReplayConfig
 
 
 def test_energy_adapter_builds_recipe_algorithm_and_trainable_batch() -> None:
@@ -58,22 +60,19 @@ def test_energy_adapter_builds_recipe_algorithm_and_trainable_batch() -> None:
     assert batch.state is not None and batch.state.shape == (3, spec.state_dim)
 
     recipe = replace(
-        default_maac_recipe(),
-        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
-        critic=ComponentRecipe(
-            "attention_q", {"hidden_dim": 16, "attention_heads": 4}
-        ),
-        experience=ComponentRecipe("replay", {"capacity": 8, "batch_size": 3}),
+        MAACConfig(),
+        policy=IndependentDiscreteConfig(hidden_dim= 16),
+        critic=AttentionQConfig(hidden_dim= 16, attention_heads= 4),
+        replay=ReplayConfig(capacity= 8, batch_size= 3),
     )
-    algorithm = MAAC.from_recipe(spec, recipe)
-    trainer = OffPolicyTrainer.from_recipe(spec, algorithm, recipe)
+    trainer = build_experiment(spec, recipe, seed=8).trainer
     metrics = trainer.update_batch(batch)
     assert np.isfinite(metrics["loss"])
 
-    with pytest.raises(ValueError, match="不支持 discrete"):
-        MASAC.from_recipe(spec, default_masac_recipe())
-    with pytest.raises(ValueError, match="不支持 individual"):
-        QMIX.from_recipe(spec, default_qmix_recipe())
+    with pytest.raises(ValueError, match="动作"):
+        MASAC(spec, MASACConfig())
+    with pytest.raises(ValueError, match="共享"):
+        QMIX(spec, QMIXConfig())
 
 
 def test_market_settlement_conserves_external_cash_flow() -> None:
@@ -129,8 +128,8 @@ def test_new_environment_dimensions_only_change_adapter_spec() -> None:
     large = EnergyTradingAdapter(
         EnergyTradingEnv(EnergyTradingConfig(num_agents=4, history_steps=8)), ActionKind.DISCRETE
     )
-    small_algorithm = MAAC.from_recipe(small.spec, default_maac_recipe())
-    large_algorithm = MAAC.from_recipe(large.spec, default_maac_recipe())
+    small_algorithm = MAAC(small.spec, MAACConfig())
+    large_algorithm = MAAC(large.spec, MAACConfig())
     assert small_algorithm.spec != large_algorithm.spec
     assert len(list(small_algorithm.get_submodule("policy.actors").children())) == 2
     assert len(list(large_algorithm.get_submodule("policy.actors").children())) == 4
@@ -170,7 +169,7 @@ def test_different_paper_adapter_uses_same_algorithm_and_batch_contract() -> Non
             )
 
     adapter = OtherPaperAdapter()
-    algorithm = QMIX.from_recipe(adapter.spec, default_qmix_recipe())
+    algorithm = QMIX(adapter.spec, QMIXConfig())
     current = adapter.reset()
     actions = algorithm.act(torch.as_tensor(current.observations).unsqueeze(0))[0].numpy()
     following = adapter.step(actions)

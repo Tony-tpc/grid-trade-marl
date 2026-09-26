@@ -9,26 +9,25 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 import torch
 
-from marl.algorithms import MAAC
+from marl.algorithms import MAACConfig
+from marl.config import load_algorithm_config
 from marl.envs import (
     Transition,
     build_energy_trading_adapter,
-    load_environment_recipe,
+    load_environment_config,
 )
-from marl.recipes import load_algorithm_recipe
+from marl.experiment import build_experiment
 from marl.runtime import SyncVectorEnv, resolve_device
-from marl.training import OffPolicyTrainer
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="个体收益电能交易博弈中的 MAAC 训练示例")
     parser.add_argument(
-        "--recipe",
+        "--config",
         type=Path,
         default=Path(__file__).parent / "configs" / "algorithms" / "maac.yaml",
     )
@@ -52,23 +51,22 @@ def main() -> None:
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
-    environment_recipe = load_environment_recipe(args.environment)
+    environment_config = load_environment_config(args.environment)
     vector_env = SyncVectorEnv(
         [
-            build_energy_trading_adapter(environment_recipe)
+            build_energy_trading_adapter(environment_config)
             for _ in range(args.num_envs)
         ]
     )
     device = resolve_device(args.device)
-    recipe = load_algorithm_recipe(args.recipe)
-    algorithm = MAAC.from_recipe(vector_env.spec, recipe).to(device)
-    trainer = OffPolicyTrainer.from_recipe(
-        vector_env.spec,
-        algorithm,
-        recipe,
-        device=device,
-        rng=rng,
+    config = load_algorithm_config(args.config)
+    if not isinstance(config, MAACConfig):
+        parser.error("--config 必须选择 MAAC 配置")
+    experiment = build_experiment(
+        vector_env, config, device=device, seed=args.seed,
     )
+    algorithm = experiment.algorithm
+    trainer = experiment.trainer
     print(f"device={device} num_envs={args.num_envs}")
 
     for episode in range(args.episodes):
@@ -80,7 +78,10 @@ def main() -> None:
         epsilon = max(0.1, 0.8 - 0.7 * episode / max(args.episodes - 1, 1))
         metrics: dict[str, float] | None = None
         while not all(step.done for step in current):
-            masks = np.stack([cast(np.ndarray, step.action_mask) for step in current])
+            available_masks = [step.action_mask for step in current]
+            if any(mask is None for mask in available_masks):
+                raise ValueError("MAAC 环境必须提供 action mask")
+            masks = np.stack([mask for mask in available_masks if mask is not None])
             explore = rng.random(args.num_envs) < epsilon
             actions = np.empty((args.num_envs, vector_env.spec.num_agents), dtype=np.int64)
             if not explore.all():

@@ -4,28 +4,25 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical
 
-from marl.algorithms.assembly import assemble_algorithm_components, require_one
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import AttentionCritic, AttentionQConfig, AttentionQNetwork
-from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig, IndependentDiscretePolicy
+from marl.modules.critic import AttentionQConfig, AttentionQNetwork
+from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
     LossBundle,
     TDLossObjective,
 )
-from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
-from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
-from marl.returns import TD0Config, TD0Estimator, ValueTargetEstimator
+from marl.returns import TD0Config, ValueTargetEstimator
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
 from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
@@ -55,95 +52,31 @@ class MAACConfig:
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
-    def build(self, spec: EnvironmentSpec) -> MAAC:
-        """在此处直接查看 MAAC 的完整组件组合。"""
+    def validate(self, spec: EnvironmentSpec) -> None:
+        if self.schema_version != 1 or self.algorithm != "maac":
+            raise ValueError("MAAC config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAAC 不支持当前动作类型")
-        return MAAC(
-            spec, self.policy.build(spec), self.critic.build(spec),
-            TDLossObjective(self.loss.td_coefficient),
-            CounterfactualPolicyObjective(),
-            EntropyObjective(self.loss.entropy_coefficient),
-            self.value_target.build(),
-        )
 
-
-def default_maac_recipe() -> AlgorithmRecipe:
-    return AlgorithmRecipe(
-        schema_version=1,
-        algorithm="maac",
-        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 128}),
-        critic=ComponentRecipe(
-            "attention_q", {"hidden_dim": 128, "attention_heads": 4}
-        ),
-        objectives=(
-            ComponentRecipe("td_mse", {"coefficient": 1.0}),
-            ComponentRecipe("counterfactual", {}),
-            ComponentRecipe("entropy", {"coefficient": 0.01}),
-        ),
-        returns=ComponentRecipe("td0", {"gamma": 0.99}),
-        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {"learning_rate": 3e-4, "max_grad_norm": 10.0, "amp_dtype": None},
-        ),
-        target_update=ComponentRecipe("soft", {"tau": 0.005}),
-    )
+    def build(self, spec: EnvironmentSpec) -> MAAC:
+        return MAAC(spec, self)
 
 
 class MAAC(BaseMARLAlgorithm):
-    def __init__(
-        self,
-        spec: EnvironmentSpec,
-        policy: DiscretePolicy,
-        critic: AttentionQNetwork,
-        td_loss: TDLossObjective,
-        policy_objective: CounterfactualPolicyObjective,
-        entropy_objective: EntropyObjective,
-        return_estimator: ValueTargetEstimator,
-        compiled_recipe: CompiledRecipe | None = None,
-    ) -> None:
+    def __init__(self, spec: EnvironmentSpec, config: MAACConfig) -> None:
         super().__init__(spec)
-        self.policy = policy
-        self.critic = critic
-        self.target_policy = deepcopy(policy)
+        config.validate(spec)
+        self.config = config
+        self.policy = config.policy.build(spec)
+        self.critic = config.critic.build(spec)
+        self.target_policy = deepcopy(self.policy)
         self.get_submodule("target_policy").requires_grad_(False)
-        self.target_critic = deepcopy(critic)
+        self.target_critic = deepcopy(self.critic)
         self.get_submodule("target_critic").requires_grad_(False)
-        self.td_loss = td_loss
-        self.policy_objective = policy_objective
-        self.entropy_objective = entropy_objective
-        self.return_estimator = return_estimator
-        self.compiled_recipe = compiled_recipe
-
-    @classmethod
-    def from_recipe(
-        cls,
-        spec: EnvironmentSpec,
-        recipe: AlgorithmRecipe,
-        *,
-        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
-    ) -> MAAC:
-        parts = assemble_algorithm_components("maac", spec, recipe, registry)
-        if not isinstance(parts.policy, IndependentDiscretePolicy):
-            raise TypeError("MAAC policy 必须是 IndependentDiscretePolicy")
-        if not isinstance(parts.critic, AttentionCritic):
-            raise TypeError("MAAC critic 必须是 AttentionCritic")
-        if not isinstance(parts.returns, TD0Estimator):
-            raise TypeError("MAAC returns 必须是 TD0Estimator")
-        return cls(
-            spec,
-            parts.policy,
-            parts.critic,
-            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MAAC")),
-            cast(
-                CounterfactualPolicyObjective,
-                require_one(parts.objectives, CounterfactualPolicyObjective, "MAAC"),
-            ),
-            cast(EntropyObjective, require_one(parts.objectives, EntropyObjective, "MAAC")),
-            parts.returns,
-            parts.compiled,
-        )
+        self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.policy_objective = CounterfactualPolicyObjective()
+        self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
+        self.return_estimator: ValueTargetEstimator = config.value_target.build()
 
     def act(
         self,

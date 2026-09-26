@@ -11,15 +11,15 @@ from marl.envs.base import (
     Transition,
     transitions_to_batch,
 )
+from marl.envs.config import (
+    EnvironmentConfig,
+    build_energy_trading_adapter,
+    energy_trading_config_from_environment,
+    environment_config_from_dict,
+    load_environment_config,
+)
 from marl.envs.energy_trading import EnergyProfiles, EnergyTradingConfig, EnergyTradingEnv
 from marl.envs.energy_trading_adapter import EnergyTradingAdapter
-from marl.envs.recipes import (
-    EnvironmentRecipe,
-    build_energy_trading_adapter,
-    energy_trading_config_from_recipe,
-    environment_recipe_from_dict,
-    load_environment_recipe,
-)
 
 __all__ = [
     "ActionKind",
@@ -33,9 +33,9 @@ __all__ = [
     "EnergyTradingConfig",
     "EnergyTradingEnv",
     "EnergyTradingAdapter",
-    "EnvironmentRecipe",
-    "environment_recipe_from_dict",
-    "load_environment_recipe",
-    "energy_trading_config_from_recipe",
+    "EnvironmentConfig",
+    "environment_config_from_dict",
+    "load_environment_config",
+    "energy_trading_config_from_environment",
     "build_energy_trading_adapter",
 ]

@@ -63,7 +63,8 @@ class SoftTargetConfig:
     tau: float = 0.005
 
     def __post_init__(self) -> None:
-        SoftTargetUpdate(self.tau)
+        if not 0 < self.tau <= 1:
+            raise ValueError("tau 必须位于 (0,1]")
 
     def build(self) -> SoftTargetUpdate:
         return SoftTargetUpdate(self.tau)
@@ -75,7 +76,8 @@ class HardTargetConfig:
     interval: int = 1
 
     def __post_init__(self) -> None:
-        HardTargetUpdate(self.interval)
+        if self.interval < 1:
+            raise ValueError("interval 必须大于 0")
 
     def build(self) -> HardTargetUpdate:
         return HardTargetUpdate(self.interval)

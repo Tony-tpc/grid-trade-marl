@@ -1,6 +1,6 @@
-"""安全、不可变的环境 YAML recipe。
+"""安全、不可变的环境 YAML config。
 
-算法 recipe 只描述训练数学；环境 recipe 只描述环境动力学和动作编码。环境尺寸由
+算法 config 只描述训练数学；环境 config 只描述环境动力学和动作编码。环境尺寸由
 构建后的 ``EnvironmentAdapter.spec`` 推导，绝不能复制到算法 YAML 中。
 """
 
@@ -39,7 +39,7 @@ def _freeze(value: object) -> EnvironmentValue:
 
 
 @dataclass(frozen=True, slots=True)
-class EnvironmentRecipe:
+class EnvironmentConfig:
     """一份环境 YAML 的不可变表示。
 
     ``environment`` 选择环境实现，``action_kind`` 选择适配器向算法公开的动作编码，
@@ -73,19 +73,19 @@ _TOP_LEVEL_FIELDS = frozenset(
 )
 
 
-def environment_recipe_from_dict(data: Mapping[str, object]) -> EnvironmentRecipe:
-    """严格解析环境 recipe；未知或缺失的顶层字段立即报错。"""
+def environment_config_from_dict(data: Mapping[str, object]) -> EnvironmentConfig:
+    """严格解析环境 config；未知或缺失的顶层字段立即报错。"""
 
     unknown = set(data) - _TOP_LEVEL_FIELDS
     missing = _TOP_LEVEL_FIELDS - set(data)
     if unknown:
-        raise ValueError(f"environment recipe 含未知字段：{sorted(unknown)}")
+        raise ValueError(f"environment config 含未知字段：{sorted(unknown)}")
     if missing:
-        raise ValueError(f"environment recipe 缺少字段：{sorted(missing)}")
+        raise ValueError(f"environment config 缺少字段：{sorted(missing)}")
     options = data["options"]
     if not isinstance(options, Mapping):
-        raise TypeError("environment recipe options 必须是 mapping")
-    return EnvironmentRecipe(
+        raise TypeError("environment config options 必须是 mapping")
+    return EnvironmentConfig(
         schema_version=int(cast(int, data["schema_version"])),
         environment=str(data["environment"]),
         action_kind=ActionKind(str(data["action_kind"])),
@@ -93,14 +93,14 @@ def environment_recipe_from_dict(data: Mapping[str, object]) -> EnvironmentRecip
     )
 
 
-def load_environment_recipe(path: str | Path) -> EnvironmentRecipe:
+def load_environment_config(path: str | Path) -> EnvironmentConfig:
     """使用 ``yaml.safe_load`` 读取环境配置，不执行任何动态 Python 导入。"""
 
     with Path(path).open(encoding="utf-8") as stream:
         data = yaml.safe_load(stream)
     if not isinstance(data, Mapping):
         raise TypeError("environment YAML 顶层必须是 mapping")
-    return environment_recipe_from_dict(cast(Mapping[str, object], data))
+    return environment_config_from_dict(cast(Mapping[str, object], data))
 
 
 _ENERGY_TRADING_FIELDS = frozenset(
@@ -111,19 +111,19 @@ _TUPLE_FIELDS = frozenset(
 )
 
 
-def energy_trading_config_from_recipe(
-    recipe: EnvironmentRecipe,
+def energy_trading_config_from_environment(
+    config: EnvironmentConfig,
 ) -> EnergyTradingConfig:
-    """把通用环境 recipe 严格绑定为 ``EnergyTradingConfig``。"""
+    """把通用环境 config 严格绑定为 ``EnergyTradingConfig``。"""
 
-    if recipe.environment != "energy_trading":
+    if config.environment != "energy_trading":
         raise ValueError(
-            "energy_trading_config_from_recipe 只接受 environment='energy_trading'"
+            "energy_trading_config_from_environment 只接受 environment='energy_trading'"
         )
-    unknown = set(recipe.options) - _ENERGY_TRADING_FIELDS
+    unknown = set(config.options) - _ENERGY_TRADING_FIELDS
     if unknown:
         raise ValueError(f"energy_trading options 含未知字段：{sorted(unknown)}")
-    options: dict[str, object] = dict(recipe.options)
+    options: dict[str, object] = dict(config.options)
     for name in _TUPLE_FIELDS:
         value = options.get(name)
         if value is not None:
@@ -134,14 +134,14 @@ def energy_trading_config_from_recipe(
 
 
 def build_energy_trading_adapter(
-    recipe: EnvironmentRecipe,
+    config: EnvironmentConfig,
     *,
     profiles: EnergyProfiles | None = None,
 ) -> EnergyTradingAdapter:
     """根据独立环境 YAML 创建一个全新的环境和适配器实例。"""
 
-    config = energy_trading_config_from_recipe(recipe)
+    settings = energy_trading_config_from_environment(config)
     return EnergyTradingAdapter(
-        EnergyTradingEnv(config, profiles),
-        recipe.action_kind,
+        EnergyTradingEnv(settings, profiles),
+        config.action_kind,
     )

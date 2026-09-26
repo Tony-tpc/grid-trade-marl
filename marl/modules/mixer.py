@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import torch
 from torch import Tensor, nn
@@ -49,7 +49,8 @@ class QMixer(nn.Module):
         hidden = torch.nn.functional.elu(torch.bmm(flat_q, w1) + b1)
         w2 = self.hyper_w2(flat_state).abs().view(-1, self.mixing_dim, 1)
         total = torch.bmm(hidden, w2) + self.value(flat_state).view(-1, 1, 1)
-        return cast(Tensor, total.view(*leading, 1))
+        result: Tensor = total.view(*leading, 1)
+        return result
 
 @dataclass(frozen=True, slots=True)
 class QMixerConfig:

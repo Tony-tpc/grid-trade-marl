@@ -3,7 +3,7 @@ from dataclasses import replace
 import numpy as np
 import torch
 
-from marl.algorithms import MAAC, default_maac_recipe
+from marl.algorithms import MAACConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -15,9 +15,11 @@ from marl.envs import (
     Transition,
     transitions_to_batch,
 )
-from marl.recipes import ComponentRecipe
+from marl.experiment import build_experiment
+from marl.modules.critic import AttentionQConfig
+from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import TensorReplayBuffer
-from marl.training import OffPolicyTrainer
+from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
 
 def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
@@ -67,21 +69,17 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
         8,
         RewardStructure.INDIVIDUAL,
     )
-    recipe = default_maac_recipe()
+    recipe = MAACConfig()
     recipe = replace(
         recipe,
-        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
-        critic=ComponentRecipe(
-            "attention_q", {"hidden_dim": 16, "attention_heads": 4}
-        ),
-        experience=ComponentRecipe("replay", {"capacity": 8, "batch_size": 4}),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {"learning_rate": 1e-3, "max_grad_norm": 0.5},
-        ),
+        policy=IndependentDiscreteConfig(hidden_dim= 16),
+        critic=AttentionQConfig(hidden_dim= 16, attention_heads= 4),
+        replay=ReplayConfig(capacity= 8, batch_size= 4),
+        update=OffPolicyUpdateConfig(learning_rate= 1e-3, max_grad_norm= 0.5),
     )
-    algorithm = MAAC.from_recipe(spec, recipe)
-    trainer = OffPolicyTrainer.from_recipe(spec, algorithm, recipe)
+    experiment = build_experiment(spec, recipe, seed=8)
+    trainer = experiment.trainer
+    algorithm = experiment.algorithm
     observations = torch.randn(4, 2, 3)
     batch = MARLBatch(
         observations=observations,
@@ -91,7 +89,7 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
         terminated=torch.zeros(4, 2, dtype=torch.bool),
         truncated=torch.zeros(4, 2, dtype=torch.bool),
     )
-    parameter = next(algorithm.policy.parameters())
+    parameter = next(algorithm.get_submodule("policy").parameters())
     before = parameter.detach().clone()
     metrics = trainer.update_batch(batch)
     after = parameter.detach()

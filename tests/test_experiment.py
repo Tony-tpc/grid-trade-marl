@@ -2,6 +2,7 @@
 from dataclasses import dataclass, replace
 
 import pytest
+import torch
 import yaml  # type: ignore[import-untyped]
 from test_composable_mappo import TinyAdapter
 from torch import nn
@@ -143,3 +144,20 @@ def test_new_checkpoint_rejects_different_config(tmp_path):
     changed = replace(MAPPOConfig(), update=PPOUpdateConfig(epochs=1))
     with pytest.raises(ValueError, match="config"):
         build_experiment(env, changed).trainer.load_checkpoint(checkpoint)
+
+
+def test_on_policy_checkpoint_repeats_next_update_exactly(tmp_path):
+    env = SyncVectorEnv([TinyAdapter()])
+    config = replace(MAPPOConfig(), update=PPOUpdateConfig(epochs=2, mini_batch_size=2))
+    run = build_experiment(env, config, seed=11)
+    run.trainer.train_rollout([1])
+    checkpoint = tmp_path / "resume.pt"
+    run.trainer.save_checkpoint(checkpoint)
+    expected = run.trainer.train_rollout([2])
+    parameters = {k: v.clone() for k, v in run.algorithm.state_dict().items()}
+    restored = build_experiment(SyncVectorEnv([TinyAdapter()]), config, seed=999)
+    restored.trainer.load_checkpoint(checkpoint)
+    actual = restored.trainer.train_rollout([2])
+    assert actual == expected
+    for key, value in restored.algorithm.state_dict().items():
+        torch.testing.assert_close(value, parameters[key], rtol=0, atol=0)

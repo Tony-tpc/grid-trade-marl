@@ -8,7 +8,7 @@ import pytest
 import torch
 
 from marl.algorithms import MAPPO
-from marl.algorithms.mappo import default_mappo_recipe
+from marl.algorithms.mappo import MAPPOConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -17,9 +17,11 @@ from marl.envs import (
     EnvironmentStep,
     RewardStructure,
 )
-from marl.recipes import AlgorithmRecipe, ComponentRecipe
+from marl.experiment import build_experiment
+from marl.modules.critic import CentralizedValueConfig
+from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import SyncVectorEnv
-from marl.training import OnPolicyTrainer
+from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
 
 
 def environment_spec() -> EnvironmentSpec:
@@ -34,22 +36,17 @@ def environment_spec() -> EnvironmentSpec:
     )
 
 
-def training_recipe() -> AlgorithmRecipe:
-    recipe = default_mappo_recipe()
+def training_recipe() -> MAPPOConfig:
+    recipe = MAPPOConfig()
     return replace(
         recipe,
-        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
-        critic=ComponentRecipe("centralized_value", {"hidden_dim": 16}),
-        experience=ComponentRecipe("rollout", {"horizon": 3}),
-        update=ComponentRecipe(
-            "ppo_update",
-            {
-                "learning_rate": 1e-3,
-                "epochs": 2,
-                "mini_batch_size": 2,
-                "max_grad_norm": 0.5,
-            },
-        ),
+        policy=IndependentDiscreteConfig(hidden_dim= 16),
+        critic=CentralizedValueConfig(hidden_dim= 16),
+        rollout=RolloutConfig(horizon= 3),
+        update=PPOUpdateConfig(learning_rate= 1e-3,
+                epochs= 2,
+                mini_batch_size= 2,
+                max_grad_norm= 0.5,),
     )
 
 
@@ -70,9 +67,9 @@ def sample_batch() -> MARLBatch:
 def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
     recipe = training_recipe()
     torch.manual_seed(41)
-    first = MAPPO.from_recipe(environment_spec(), recipe)
+    first = MAPPO(environment_spec(), recipe)
     torch.manual_seed(41)
-    second = MAPPO.from_recipe(environment_spec(), recipe)
+    second = MAPPO(environment_spec(), recipe)
     batch = sample_batch()
 
     assert torch.allclose(
@@ -89,11 +86,11 @@ def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
 
 
 def test_recipe_rejects_wrong_algorithm_and_invalid_shapes() -> None:
-    recipe = replace(default_mappo_recipe(), algorithm="other")
-    with pytest.raises(ValueError, match="不能从"):
-        MAPPO.from_recipe(environment_spec(), recipe)
+    recipe = replace(MAPPOConfig(), algorithm="other")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="不匹配"):
+        MAPPO(environment_spec(), recipe)
 
-    algorithm = MAPPO.from_recipe(environment_spec(), default_mappo_recipe())
+    algorithm = MAPPO(environment_spec(), MAPPOConfig())
     with pytest.raises(ValueError, match="action_mask"):
         algorithm.sample(
             torch.zeros(1, 2, 3),
@@ -154,13 +151,9 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
 ) -> None:
     environment = SyncVectorEnv([TinyAdapter(), TinyAdapter()])
     recipe = training_recipe()
-    algorithm = MAPPO.from_recipe(environment.spec, recipe)
-    trainer = OnPolicyTrainer.from_recipe(
-        environment,
-        algorithm,
-        recipe,
-        generator=torch.Generator().manual_seed(8),
-    )
+    experiment = build_experiment(environment, recipe, seed=8)
+    trainer = experiment.trainer
+    algorithm = experiment.algorithm
     before = [parameter.detach().clone() for parameter in algorithm.parameters()]
     metrics = trainer.train_rollout([1, 2])
     after = list(algorithm.parameters())
@@ -178,17 +171,17 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
     with torch.no_grad():
         for parameter in algorithm.parameters():
             parameter.add_(10.0)
-    restored = OnPolicyTrainer.from_recipe(environment, algorithm, recipe)
+    restored = build_experiment(environment, recipe, seed=8).trainer
+    restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
     assert restored.update_plan.update_count == 1
     assert restored.update_plan.optimizer.param_groups[0]["lr"] == pytest.approx(1e-3)
     assert all(
         torch.equal(expected, actual.detach())
-        for expected, actual in zip(saved_parameters, algorithm.parameters(), strict=True)
+        for expected, actual in zip(saved_parameters, restored_algorithm.parameters(), strict=True)
     )
 
-    mismatched = replace(recipe, update=ComponentRecipe("ppo_update", {"epochs": 1}))
-    other = MAPPO.from_recipe(environment.spec, mismatched)
-    other_trainer = OnPolicyTrainer.from_recipe(environment, other, mismatched)
-    with pytest.raises(ValueError, match="recipe"):
+    mismatched = replace(recipe, update=PPOUpdateConfig(epochs= 1))
+    other_trainer = build_experiment(environment, mismatched, seed=8).trainer
+    with pytest.raises(ValueError, match="config"):
         other_trainer.load_checkpoint(checkpoint)

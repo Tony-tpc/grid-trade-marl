@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 import torch
 from torch import Tensor, nn
@@ -50,15 +50,11 @@ class LocalQPolicy(PolicyTopology, Protocol):
     def q_values(self, observations: Tensor) -> Tensor: ...
 
 
-def _stack_scalar(
-    outputs: list[ActionHeadOutput], attribute: str
-) -> Tensor:
-    """把每个 Actor 的 ``[*B]`` 结果堆叠为 ``[*B, N]``。"""
-
-    return torch.stack(
-        [cast(Tensor, getattr(output, attribute)) for output in outputs],
-        dim=-1,
-    )
+def _stack_scalar(values: list[Tensor | None]) -> Tensor:
+    """把各 Actor 的 [*B] 标量结果堆叠为 [*B,N]。"""
+    if any(value is None for value in values):
+        raise ValueError("Actor 必须返回 log_prob 和 entropy")
+    return torch.stack([value for value in values if value is not None], dim=-1)
 
 
 def _stack_parameter(outputs: list[ActionHeadOutput], name: str) -> Tensor:
@@ -109,16 +105,14 @@ class IndependentDiscretePolicy(nn.Module):
         """返回联合分类参数 ``[*B, N, A]``，不采样动作。"""
 
         self._validate(observations, action_mask)
-        return torch.stack(
-            [
-                cast(Actor, actor).discrete_logits(
-                    observations[..., index, :],
-                    action_mask=self._mask_for(action_mask, index),
-                )
-                for index, actor in enumerate(self.actors)
-            ],
-            dim=-2,
-        )
+        logits = []
+        for index, actor in enumerate(self.actors):
+            assert isinstance(actor, Actor)
+            logits.append(actor.discrete_logits(
+                observations[..., index, :],
+                action_mask=self._mask_for(action_mask, index),
+            ))
+        return torch.stack(logits, dim=-2)
 
     def act(
         self,
@@ -131,7 +125,7 @@ class IndependentDiscretePolicy(nn.Module):
 
         self._validate(observations, action_mask)
         outputs = [
-            cast(Actor, actor)(
+            actor(
                 observations[..., index, :],
                 deterministic=deterministic,
                 action_mask=self._mask_for(action_mask, index),
@@ -139,10 +133,10 @@ class IndependentDiscretePolicy(nn.Module):
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
-            actions=_stack_scalar(outputs, "actions"),
+            actions=_stack_scalar([output.actions for output in outputs]),
             logits=_stack_parameter(outputs, "logits"),
-            log_prob=_stack_scalar(outputs, "log_prob"),
-            entropy=_stack_scalar(outputs, "entropy"),
+            log_prob=_stack_scalar([output.log_prob for output in outputs]),
+            entropy=_stack_scalar([output.entropy for output in outputs]),
         )
 
     def evaluate(
@@ -157,19 +151,18 @@ class IndependentDiscretePolicy(nn.Module):
         self._validate(observations, action_mask)
         if actions.shape != observations.shape[:-1]:
             raise ValueError("离散 actions 应为 [...,N]")
-        outputs = [
-            cast(Actor, actor).evaluate_actions(
-                observations[..., index, :],
-                actions[..., index],
+        outputs = []
+        for index, actor in enumerate(self.actors):
+            assert isinstance(actor, Actor)
+            outputs.append(actor.evaluate_actions(
+                observations[..., index, :], actions[..., index],
                 action_mask=self._mask_for(action_mask, index),
-            )
-            for index, actor in enumerate(self.actors)
-        ]
+            ))
         return MARLModelOutput(
-            actions=_stack_scalar(outputs, "actions"),
+            actions=_stack_scalar([output.actions for output in outputs]),
             logits=_stack_parameter(outputs, "logits"),
-            log_prob=_stack_scalar(outputs, "log_prob"),
-            entropy=_stack_scalar(outputs, "entropy"),
+            log_prob=_stack_scalar([output.log_prob for output in outputs]),
+            entropy=_stack_scalar([output.entropy for output in outputs]),
         )
 
 
@@ -203,15 +196,15 @@ class IndependentDeterministicPolicy(nn.Module):
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
         outputs = [
-            cast(Actor, actor)(
+            actor(
                 observations[..., index, :], deterministic=deterministic
             )
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
             actions=torch.stack([output.actions for output in outputs], dim=-2),
-            log_prob=_stack_scalar(outputs, "log_prob"),
-            entropy=_stack_scalar(outputs, "entropy"),
+            log_prob=_stack_scalar([output.log_prob for output in outputs]),
+            entropy=_stack_scalar([output.entropy for output in outputs]),
         )
 
 
@@ -245,15 +238,15 @@ class IndependentGaussianPolicy(nn.Module):
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
         outputs = [
-            cast(Actor, actor)(
+            actor(
                 observations[..., index, :], deterministic=deterministic
             )
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
             actions=torch.stack([output.actions for output in outputs], dim=-2),
-            log_prob=_stack_scalar(outputs, "log_prob"),
-            entropy=_stack_scalar(outputs, "entropy"),
+            log_prob=_stack_scalar([output.log_prob for output in outputs]),
+            entropy=_stack_scalar([output.entropy for output in outputs]),
         )
 
 
@@ -270,7 +263,8 @@ class SharedDiscreteQPolicy(nn.Module):
     def q_values(self, observations: Tensor) -> Tensor:
         if observations.shape[-1] != self.observation_dim:
             raise ValueError("observations 最后一维与策略 EnvironmentSpec 不一致")
-        return cast(Tensor, self.q_head(self.backbone(observations).features))
+        values: Tensor = self.q_head(self.backbone(observations).features)
+        return values
 
     def act(
         self,

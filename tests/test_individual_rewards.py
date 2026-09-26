@@ -12,15 +12,15 @@ from marl.algorithms import (
     MAPPO,
     MASAC,
     QMIX,
-    default_maac_recipe,
-    default_maddpg_recipe,
-    default_mappo_recipe,
-    default_masac_recipe,
-    default_qmix_recipe,
+    MAACConfig,
+    MADDPGConfig,
+    MAPPOConfig,
+    MASACConfig,
+    QMIXConfig,
 )
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
-from marl.recipes import ComponentRecipe
+from marl.returns import TD0Config
 
 
 def spec(
@@ -46,9 +46,9 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
         truncated=flags,
     )
     maddpg_recipe = replace(
-        default_maddpg_recipe(), returns=ComponentRecipe("td0", {"gamma": 0.0})
+        MADDPGConfig(), value_target=TD0Config(gamma= 0.0)
     )
-    maddpg = MADDPG.from_recipe(spec(ActionKind.CONTINUOUS), maddpg_recipe)
+    maddpg = MADDPG(spec(ActionKind.CONTINUOUS), maddpg_recipe)
     assert maddpg.get_submodule("policy.actors.0") is not maddpg.get_submodule("policy.actors.1")
     q = maddpg.critics(maddpg._critic_input(observations, actions))
     assert torch.allclose(
@@ -56,9 +56,9 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
         F.mse_loss(q, rewards),
     )
     masac_recipe = replace(
-        default_masac_recipe(), returns=ComponentRecipe("td0", {"gamma": 0.0})
+        MASACConfig(), value_target=TD0Config(gamma= 0.0)
     )
-    masac = MASAC.from_recipe(spec(ActionKind.CONTINUOUS), masac_recipe)
+    masac = MASAC(spec(ActionKind.CONTINUOUS), masac_recipe)
     q1, q2 = masac.critics(masac._critic_input(observations, actions))
     expected = F.mse_loss(q1, rewards) + F.mse_loss(q2, rewards)
     assert torch.allclose(
@@ -68,7 +68,7 @@ def test_maddpg_and_masac_fit_individual_targets() -> None:
 
 def test_maac_counterfactual_value_ignores_own_replay_action() -> None:
     torch.manual_seed(4)
-    algorithm = MAAC.from_recipe(spec(ActionKind.DISCRETE), default_maac_recipe())
+    algorithm = MAAC(spec(ActionKind.DISCRETE), MAACConfig())
     observations = torch.randn(5, 2, 3)
     actions = torch.zeros(5, 2, dtype=torch.long)
     changed = actions.clone()
@@ -79,7 +79,7 @@ def test_maac_counterfactual_value_ignores_own_replay_action() -> None:
 
 
 def test_mappo_keeps_per_agent_returns() -> None:
-    algorithm = MAPPO.from_recipe(spec(ActionKind.DISCRETE), default_mappo_recipe())
+    algorithm = MAPPO(spec(ActionKind.DISCRETE), MAPPOConfig())
     returns = torch.tensor([[2.0, -1.0]]).expand(3, -1)
     batch = MARLBatch(
         observations=torch.randn(3, 2, 3),
@@ -98,9 +98,9 @@ def test_mappo_keeps_per_agent_returns() -> None:
 
 
 def test_qmix_rejects_general_sum_reward_batch() -> None:
-    algorithm = QMIX.from_recipe(
+    algorithm = QMIX(
         spec(ActionKind.DISCRETE, RewardStructure.SHARED),
-        default_qmix_recipe(),
+        QMIXConfig(),
     )
     flags = torch.zeros(2, 2, dtype=torch.bool)
     batch = MARLBatch(

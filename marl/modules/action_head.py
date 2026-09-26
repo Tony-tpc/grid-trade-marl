@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 from torch import Tensor, nn
@@ -51,12 +50,12 @@ class DiscreteActionHead(BaseActionHead):
 
         调用方须确保每行 action_mask 至少有一个合法动作。
         """
-        logits = self.logits_layer(features)
+        logits: Tensor = self.logits_layer(features)
         if action_mask is not None:
             if action_mask.shape != logits.shape:
                 raise ValueError("action_mask 与 logits 的形状必须一致")
             logits = logits.masked_fill(~action_mask.bool(), torch.finfo(logits.dtype).min)
-        return cast(Tensor, logits)
+        return logits
 
     def forward(
         self, features: Tensor, deterministic: bool = False, action_mask: Tensor | None = None

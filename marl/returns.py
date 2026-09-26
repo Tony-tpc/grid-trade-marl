@@ -126,7 +126,8 @@ class GAEConfig:
     normalize: bool = True
 
     def __post_init__(self) -> None:
-        GAEEstimator(self.gamma, self.gae_lambda, self.normalize)
+        if not 0 <= self.gamma <= 1 or not 0 <= self.gae_lambda <= 1:
+            raise ValueError("gamma/gae_lambda 必须位于 [0,1]")
 
     def build(self) -> GAEEstimator:
         return GAEEstimator(self.gamma, self.gae_lambda, self.normalize)
@@ -138,7 +139,8 @@ class TD0Config:
     gamma: float = 0.99
 
     def __post_init__(self) -> None:
-        TD0Estimator(self.gamma)
+        if not 0 <= self.gamma <= 1:
+            raise ValueError("gamma 必须位于 [0,1]")
 
     def build(self) -> TD0Estimator:
         return TD0Estimator(self.gamma)

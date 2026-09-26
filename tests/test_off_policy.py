@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from marl.algorithms import MADDPG, default_maddpg_recipe
+from marl.algorithms import MADDPG, MADDPGConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -16,8 +16,11 @@ from marl.envs import (
     RewardStructure,
     Transition,
 )
-from marl.recipes import ComponentRecipe
-from marl.training import OffPolicyTrainer
+from marl.experiment import build_experiment
+from marl.modules.critic import IndependentQConfig
+from marl.modules.policy import IndependentDeterministicConfig
+from marl.target_updates import SoftTargetConfig
+from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
 
 
 def spec() -> EnvironmentSpec:
@@ -28,15 +31,12 @@ def spec() -> EnvironmentSpec:
 
 def recipe():
     return replace(
-        default_maddpg_recipe(),
-        policy=ComponentRecipe("independent_deterministic", {"hidden_dim": 16}),
-        critic=ComponentRecipe("independent_centralized_q", {"hidden_dim": 16}),
-        experience=ComponentRecipe("replay", {"capacity": 4, "batch_size": 2}),
-        update=ComponentRecipe(
-            "off_policy_update",
-            {"learning_rate": 1e-3, "max_grad_norm": 0.5},
-        ),
-        target_update=ComponentRecipe("soft", {"tau": 0.5}),
+        MADDPGConfig(),
+        policy=IndependentDeterministicConfig(hidden_dim= 16),
+        critic=IndependentQConfig(hidden_dim= 16),
+        replay=ReplayConfig(capacity= 4, batch_size= 2),
+        update=OffPolicyUpdateConfig(learning_rate= 1e-3, max_grad_norm= 0.5),
+        target_update=SoftTargetConfig(tau= 0.5),
     )
 
 
@@ -75,8 +75,9 @@ def transition(value: float) -> Transition:
 
 
 def test_off_policy_update_changes_online_and_target_parameters() -> None:
-    algorithm = MADDPG.from_recipe(spec(), recipe())
-    trainer = OffPolicyTrainer.from_recipe(spec(), algorithm, recipe())
+    algorithm = MADDPG(spec(), recipe())
+    trainer = build_experiment(spec(), recipe(), seed=8).trainer
+    algorithm = trainer.algorithm
     optimized_ids = {
         id(parameter)
         for group in trainer.update_plan.optimizer.param_groups
@@ -101,13 +102,9 @@ def test_off_policy_update_changes_online_and_target_parameters() -> None:
 
 def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> None:
     selected_recipe = recipe()
-    algorithm = MADDPG.from_recipe(spec(), selected_recipe)
-    trainer = OffPolicyTrainer.from_recipe(
-        spec(),
-        algorithm,
-        selected_recipe,
-        rng=np.random.default_rng(7),
-    )
+    algorithm = MADDPG(spec(), selected_recipe)
+    trainer = build_experiment(spec(), selected_recipe, seed=8).trainer
+    algorithm = trainer.algorithm
     trainer.record(transition(1.0))
     trainer.record(transition(2.0))
     assert trainer.ready
@@ -116,10 +113,9 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
     trainer.save_checkpoint(checkpoint)
     expected = [parameter.detach().clone() for parameter in algorithm.parameters()]
 
-    restored_algorithm = MADDPG.from_recipe(spec(), selected_recipe)
-    restored = OffPolicyTrainer.from_recipe(
-        spec(), restored_algorithm, selected_recipe
-    )
+    restored_algorithm = MADDPG(spec(), selected_recipe)
+    restored = build_experiment(spec(), selected_recipe, seed=8).trainer
+    restored_algorithm = restored.algorithm
     restored.load_checkpoint(checkpoint)
     assert len(restored.replay) == 2
     assert restored.update_plan.update_count == 1
@@ -132,9 +128,8 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
 
     mismatched = replace(
         selected_recipe,
-        target_update=ComponentRecipe("soft", {"tau": 0.1}),
+        target_update=SoftTargetConfig(tau= 0.1),
     )
-    other = MADDPG.from_recipe(spec(), mismatched)
-    other_trainer = OffPolicyTrainer.from_recipe(spec(), other, mismatched)
-    with pytest.raises(ValueError, match="recipe"):
+    other_trainer = build_experiment(spec(), mismatched, seed=8).trainer
+    with pytest.raises(ValueError, match="config"):
         other_trainer.load_checkpoint(checkpoint)

@@ -1,23 +1,19 @@
 """Fixed-input migration regression: both construction paths must be identical."""
+import json
+from pathlib import Path
+
 import pytest
 import torch
 
-from marl.algorithms import MAAC, MADDPG, MAPPO, MASAC, QMIX
-from marl.algorithms.maac import MAACConfig, default_maac_recipe
-from marl.algorithms.maddpg import MADDPGConfig, default_maddpg_recipe
-from marl.algorithms.mappo import MAPPOConfig, default_mappo_recipe
-from marl.algorithms.masac import MASACConfig, default_masac_recipe
-from marl.algorithms.qmix import QMIXConfig, default_qmix_recipe
+from marl.algorithms.maac import MAACConfig
+from marl.algorithms.maddpg import MADDPGConfig
+from marl.algorithms.mappo import MAPPOConfig
+from marl.algorithms.masac import MASACConfig
+from marl.algorithms.qmix import QMIXConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 
-CASES = [
-    (MAPPOConfig(), MAPPO, default_mappo_recipe),
-    (MAACConfig(), MAAC, default_maac_recipe),
-    (MADDPGConfig(), MADDPG, default_maddpg_recipe),
-    (MASACConfig(), MASAC, default_masac_recipe),
-    (QMIXConfig(), QMIX, default_qmix_recipe),
-]
+CASES = [MAPPOConfig(), MAACConfig(), MADDPGConfig(), MASACConfig(), QMIXConfig()]
 
 
 def migration_batch(config):
@@ -48,26 +44,31 @@ def migration_batch(config):
     return spec, batch
 
 
-@pytest.mark.parametrize("config,algorithm,recipe", CASES)
-def test_direct_build_matches_legacy(config, algorithm, recipe):
+@pytest.mark.parametrize("config", CASES)
+def test_matches_pre_migration_numerical_fixture(config):
+    # Captured before removing the recipe implementation (commit 0f6fc53).
+    expected = json.loads(
+        (Path(__file__).parent / "fixtures" / "algorithm_baseline.json").read_text()
+    )[config.algorithm]
     spec, batch = migration_batch(config)
     torch.manual_seed(91)
-    old = algorithm.from_recipe(spec, recipe())
-    torch.manual_seed(91)
-    new = config.build(spec)
-    assert old.state_dict().keys() == new.state_dict().keys()
-    for key, value in old.state_dict().items():
-        torch.testing.assert_close(value, new.state_dict()[key], rtol=0, atol=0)
+    model = config.build(spec)
     torch.manual_seed(21)
-    old_actions = old.act(batch.observations, action_mask=batch.action_mask)
-    torch.manual_seed(21)
-    torch.testing.assert_close(old_actions, new.act(
-        batch.observations, action_mask=batch.action_mask,
-    ), rtol=0, atol=0)
+    actions = model.act(batch.observations, action_mask=batch.action_mask)
+    torch.testing.assert_close(actions, torch.tensor(expected["actions"]))
     torch.manual_seed(31)
-    old_loss = old.compute_loss_bundle(batch)
-    torch.manual_seed(31)
-    new_loss = new.compute_loss_bundle(batch)
-    torch.testing.assert_close(old_loss.total, new_loss.total, rtol=0, atol=0)
-    for key, value in old_loss.terms.items():
-        torch.testing.assert_close(value, new_loss.terms[key], rtol=0, atol=0)
+    bundle = model.compute_loss_bundle(batch)
+    assert bundle.total.item() == pytest.approx(expected["loss"], rel=1e-6, abs=1e-6)
+    for key, value in bundle.terms.items():
+        assert value.item() == pytest.approx(expected["terms"][key], rel=1e-6, abs=1e-6)
+    if config.algorithm == "mappo":
+        values = model.values(batch.observations, batch.state)
+    elif config.algorithm == "maac":
+        values = model.critic(batch.observations, batch.actions)
+    elif config.algorithm == "qmix":
+        values = model.policy.q_values(batch.observations)
+    else:
+        values = model.critics(model._critic_input(batch.observations, batch.actions))
+    if isinstance(values, tuple):
+        values = torch.stack(values)
+    torch.testing.assert_close(values, torch.tensor(expected["values"]), rtol=1e-6, atol=1e-6)

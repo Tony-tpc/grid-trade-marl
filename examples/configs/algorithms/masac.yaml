@@ -1,45 +1,35 @@
-# MASAC 完整算法 recipe；连续随机动作、twin-Q、自动温度和 off-policy replay。
-schema_version: 1
-algorithm: masac
+# MASAC 完整默认配置；以下值与 Python MASACConfig() 一致。
+# 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
+schema_version: 1  # 必填；配置版本，只允许整数 1。
+algorithm: masac  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
-  type: independent_gaussian  # 每个智能体独立的 tanh-Gaussian Actor。
-  options:
-    hidden_dim: 128  # 可选，默认 128；Actor 隐藏维度。
+  kind: independent_gaussian  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
 critic:
-  type: twin_independent_centralized_q  # 两组逐智能体集中式 Q，用较小值抑制过估计。
-  options:
-    hidden_dim: 128  # 可选，默认 128；每个 Q 网络隐藏维度。
+  kind: twin_independent_centralized_q  # 可选；组件实现名称，默认值如本行。
+  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
-objectives:
-  - type: td_mse
-    options:
-      coefficient: 1.0  # 可选，默认 1.0；critic loss 权重。
-  - type: sac_entropy  # SAC actor objective 与可训练温度 alpha。
-    options:
-      initial_alpha: 0.2  # 可选，默认 0.2；初始 entropy temperature，必须 > 0。
-      target_entropy: null  # 可选，默认 null；null 表示使用 -action_dim。
+loss:
+  td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。
+  initial_alpha: 0.2  # 可选；SAC 初始熵温度，必须 > 0。
+  target_entropy: null  # 可选；null 使用 -action_dim，保持逐智能体温度。
 
-returns:
-  type: td0
-  options:
-    gamma: 0.99  # 可选，默认 0.99。
+value_target:
+  kind: td0  # 可选；组件实现名称，默认值如本行。
+  gamma: 0.99  # 可选；折扣因子，范围 [0,1]。
 
-experience:
-  type: replay
-  options:
-    capacity: 100000  # 可选，默认 100000。
-    batch_size: 256  # 可选，默认 256。
+replay:
+  capacity: 100000  # 可选；replay 容量，必须 >= 1。
+  batch_size: 256  # 可选；每次 replay 采样量，1 <= batch_size <= capacity。
 
 update:
-  type: off_policy_update
-  options:
-    learning_rate: 0.0003  # 可选，默认 0.0003。
-    max_grad_norm: 10.0  # 可选，默认 10.0；null 表示关闭。
-    amp_dtype: null  # 可选，默认 null；可设 bf16。
+  learning_rate: 0.0003  # 可选；Adam 学习率，必须 > 0。
+  max_grad_norm: 10  # 可选；梯度范数上限，必须 > 0；null 关闭裁剪。
+  amp_dtype: null  # 可选；null 使用 FP32；bf16 需要支持 BF16 的 CUDA。
 
 target_update:
-  type: soft
-  options:
-    tau: 0.005  # 可选，默认 0.005；范围 (0, 1]。
+  kind: soft  # 可选；组件实现名称，默认值如本行。
+  tau: 0.005  # 可选；Polyak 更新系数，范围 (0,1]。
+# target_update 也可整节替换为 {kind: hard, interval: 1}；interval 是正整数。
