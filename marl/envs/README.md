@@ -62,11 +62,11 @@ adapter = EnergyTradingAdapter(environment, ActionKind.DISCRETE)
 `Transition(current, actions, next)` 记录一步经验；
 `transitions_to_batch([...])` 将多步经验堆叠为 `MARLBatch`。
 具体适配器在返回时调用 `validate_step()`，会检查观测、状态、奖励和动作掩码维度。
-`algorithm_config_from_env("maac", adapter.spec)` 自动填充智能体数、观测、动作
-和全局状态维度。训练器和算法不读取 `EnergyTradingEnv` 的内部字段。
+`MAAC.from_recipe(adapter.spec, recipe)` 从 EnvironmentSpec 注入智能体数、观测、
+动作和全局状态维度。训练器和算法不读取 `EnergyTradingEnv` 的内部字段。
 
 若新论文环境的观测编码、奖励公式或结算规则不同，实现新的具体环境与适配器即可。
-若动作空间从离散变为连续，需要选择与动作类型兼容的算法；配置工厂会检测这点。
+若动作空间从离散变为连续，需要选择与动作类型匹配的算法；recipe 编译会检测这点。
 若新论文需要可变数量智能体、异质动作维度或混合动作分布，则还需扩展通用模型能力；
 仅做数据格式转换不足以改变算法的数学定义。
 

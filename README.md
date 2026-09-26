@@ -41,7 +41,7 @@ marl/
 │   └── output.py           # 统一模型输出 MARLModelOutput
 ├── envs/
 │   ├── base.py             # EnvironmentSpec/Step/Adapter
-│   ├── config.py           # 旧算法的环境配置工厂
+│   ├── energy_trading.py   # 示例能源环境
 │   └── *_adapter.py        # 环境动作与公共动作协议之间的转换
 ├── models/
 │   ├── base.py             # 所有 Backbone 的抽象接口
@@ -62,7 +62,8 @@ marl/
 │   ├── masac.py
 │   └── qmix.py
 ├── training/
-│   └── on_policy.py        # RolloutBuffer、PPOUpdatePlan、OnPolicyTrainer
+│   ├── on_policy.py        # RolloutBuffer、PPOUpdatePlan、OnPolicyTrainer
+│   └── off_policy.py       # Replay、OffPolicyUpdatePlan、OffPolicyTrainer
 ├── components.py           # 六类平级组件协议
 ├── policies.py             # 可复用策略拓扑
 ├── objectives.py           # PPO/value/entropy 目标与 LossBundle
@@ -70,6 +71,7 @@ marl/
 ├── registry.py             # 显式分类注册表
 ├── recipes.py              # Python/YAML recipe 和编译校验
 ├── builtins.py             # 内置组件的严格构造工厂
+├── target_updates.py       # soft/hard/no target update
 └── runtime.py              # 设备、向量环境、离策略 replay/运行设施
 ```
 
@@ -208,8 +210,9 @@ policy、critic、return estimator、experience source、update plan 和 target 
 6. 用固定小张量对照论文公式或迁移前实现；
 7. 增加一个小环境完整训练及 checkpoint 恢复测试。
 
-当前 MAPPO 是组合式参考实现；MAAC、MADDPG、MASAC、QMIX 仍保留旧
-`BaseMARLAlgorithm.optimize()` 入口，迁移时应逐个进行，不要一次重写全部算法。
+五个算法均只支持 `EnvironmentSpec + AlgorithmRecipe` 构造，并统一返回
+`LossBundle`。MAPPO 使用 `OnPolicyTrainer`；MAAC、MADDPG、MASAC、QMIX 使用
+`OffPolicyTrainer`。算法类中没有 optimizer step、epoch 调度或 target 更新执行逻辑。
 
 ## 新论文接入推荐流程
 
@@ -231,13 +234,12 @@ policy、critic、return estimator、experience source、update plan 和 target 
 具体环境 -> EnvironmentAdapter -> EnvironmentStep
                    |
                    +-> off-policy: Transition -> TensorReplayBuffer
-                   |               -> MARLBatch -> 旧算法 optimize()
+                   |               -> MARLBatch -> OffPolicyUpdatePlan
                    |
                    +-> on-policy: RolloutBuffer -> GAEEstimator
                                    -> PreparedRollout -> PPOUpdatePlan
 
-adapter.spec -> EnvironmentSpec -> compile_recipe（组合式链路）
-                             └-> algorithm_config_from_env（旧算法兼容链路）
+adapter.spec -> EnvironmentSpec -> compile_recipe -> Algorithm.from_recipe
 ```
 
 接口定义在 [`marl/envs/base.py`](marl/envs/base.py)。后续换论文环境时，新增一个
@@ -271,9 +273,10 @@ MAPPO 由 `OnPolicyTrainer` 直接采集 fresh rollout。如果新环境的动�
 需按 [PyTorch 官方安装说明](https://docs.pytorch.org/get-started/locally/) 在本项目
 虚拟环境安装 CUDA 版 PyTorch。`--amp bf16` 可在支持
 BF16 的 CUDA 设备上开启混合精度；默认保持 FP32。通用执行组件位于
-`marl/runtime.py`，负责设备选择、并行适配器和离策略经验存储。旧的离策略算法仍可调用
-`BaseMARLAlgorithm.optimize()`；MAPPO 的采样、GAE、mini-batch 与多 epoch 更新由
-`OnPolicyTrainer` 和 `PPOUpdatePlan` 负责。环境适配器只采集与校验数据，不负责梯度更新。
+`marl/runtime.py`，负责设备选择、并行适配器和离策略经验存储。MAPPO 的采样、GAE、
+mini-batch 与多 epoch 更新由 `OnPolicyTrainer` 和 `PPOUpdatePlan` 负责；其他四个算法
+由 `OffPolicyTrainer` 和 `OffPolicyUpdatePlan` 管理 replay、优化器、梯度裁剪、
+target update 与 checkpoint。环境适配器只采集与校验数据，不负责梯度更新。
 如果已有与 Python、操作系统及架构兼容的 CUDA wheel，也可以用
 `python -m pip install --no-index --no-deps --force-reinstall <wheel路径>`
 离线安装；安装后请检查 `torch.cuda.is_available()` 并运行训练测试。
@@ -308,10 +311,10 @@ MAPPO 已迁移到完整的组合式 on-policy 链路。使用 YAML 配置运行
 同一链路也可以完全由 Python recipe 构造，环境尺寸仍只从 `env.spec` 注入：
 
 ```python
-from marl.algorithms import MAPPO, MAPPOConfig, default_mappo_recipe
+from marl.algorithms import MAPPO, default_mappo_recipe
 from marl.training import OnPolicyTrainer
 
-recipe = default_mappo_recipe(MAPPOConfig(hidden_dim=64))
+recipe = default_mappo_recipe()
 algorithm = MAPPO.from_recipe(env.spec, recipe)
 trainer = OnPolicyTrainer.from_recipe(env, algorithm, recipe)
 metrics = trainer.train_rollout(seeds=[42])
@@ -342,4 +345,6 @@ Python 中也可以使用 `default_mappo_recipe()`，或者通过 `register_poli
 只有出现新的数学机制时才新增组件，不复制完整算法类。YAML 不能填写 Python 导入路径，
 环境尺寸始终由 `EnvironmentSpec` 注入。
 
-MAAC、MADDPG、MASAC、QMIX 暂时保留原更新入口，后续将按相同组件协议逐个迁移。
+MAAC、MADDPG、MASAC、QMIX 的默认 YAML recipe 位于 `examples/configs/`，其 Python
+入口分别为 `default_maac_recipe()`、`default_maddpg_recipe()`、
+`default_masac_recipe()` 和 `default_qmix_recipe()`。

@@ -114,8 +114,10 @@ MAPPO 使用完整的 fresh on-policy 链路：`OnPolicyTrainer` 采集固定 ho
 保存 old log-prob/value，按 termination/truncation 语义计算 GAE，再由 `PPOUpdatePlan`
 随机生成 mini-batch 并执行多个 epoch。一次 rollout 更新后即失效，不能进入长期 replay。
 
-其他四个算法在迁移前仍使用 `algorithm.optimize(batch, optimizer)`。这只是兼容入口，
-新组件不应把 optimizer step 放回算法类。
+MAAC、MADDPG、MASAC、QMIX 使用 `OffPolicyTrainer`：trainer 持有 replay buffer，
+`OffPolicyUpdatePlan` 统一执行 `LossBundle.total.backward()`、梯度裁剪、optimizer step
+和 recipe 选择的 soft/hard target update。具体算法只实现 `compute_loss_bundle()` 和
+`target_pairs()`，不直接更新参数。
 
 ## 8. 当前基础版本的边界
 

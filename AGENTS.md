@@ -221,7 +221,7 @@ registry/recipes 只负责选择和装配，不反向依赖具体论文环境。
 只有新算法具有不能由当前组件表达的特有前向/损失语义时才增加算法类：
 
 1. 新类直接继承 `BaseMARLAlgorithm`；
-2. 配置使用 frozen dataclass；
+2. 使用不可变 `AlgorithmRecipe`，环境尺寸只来自 `EnvironmentSpec`；
 3. 模型输出优先使用 `MARLModelOutput`；
 4. 组合损失优先使用 `LossBundle`；
 5. 算法类不拥有通用 optimizer epoch 循环；
@@ -261,7 +261,7 @@ registry/recipes 只负责选择和装配，不反向依赖具体论文环境。
 3. **梯度测试**：目标参数有梯度，冻结或 target 参数无意外梯度；
 4. **状态测试**：checkpoint 恢复模型、optimizer、recipe 和更新计数；
 5. **端到端小环境**：固定 seed 完成一次采样和参数更新；
-6. **兼容回归**：迁移前后固定输入的 action/log-prob/value/loss 等价。
+6. **迁移等价回归**：迁移前后固定输入的 action/log-prob/value/loss 等价。
 
 不要用长时间训练代替数学单测。训练曲线可用于最终验证，但不能证明公式实现正确。
 
