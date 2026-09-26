@@ -326,6 +326,7 @@ class OnPolicyTrainer:
         *,
         device: torch.device | str = "cpu",
         recipe: AlgorithmRecipe | None = None,
+        config_data: Mapping[str, object] | None = None,
     ) -> None:
         if rollout_horizon < 1 or rollout_horizon > environment.spec.horizon:
             raise ValueError("rollout_horizon 必须位于 [1, environment horizon]")
@@ -336,6 +337,7 @@ class OnPolicyTrainer:
         self.update_plan = update_plan
         self.device = torch.device(device)
         self.recipe = recipe
+        self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
 
     @classmethod
     def from_recipe(
@@ -486,6 +488,7 @@ class OnPolicyTrainer:
 
         return {
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
+            "config": deepcopy(self.config_data),
             "update_plan": self.update_plan.state_dict(),
             "recipe": recipe_to_dict(self.recipe) if self.recipe is not None else None,
         }
@@ -494,6 +497,8 @@ class OnPolicyTrainer:
         from marl.recipes import recipe_to_dict
 
         saved_recipe = state.get("recipe")
+        if state.get("config") != self.config_data:
+            raise ValueError("checkpoint config 与当前 trainer config 不一致")
         current_recipe = recipe_to_dict(self.recipe) if self.recipe is not None else None
         if saved_recipe != current_recipe:
             raise ValueError("checkpoint recipe 与当前 trainer recipe 不一致")

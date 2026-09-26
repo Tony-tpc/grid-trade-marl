@@ -162,7 +162,8 @@ class OffPolicyTrainer:
         update_plan: OffPolicyUpdatePlan,
         *,
         device: torch.device | str = "cpu",
-        recipe: AlgorithmRecipe,
+        recipe: AlgorithmRecipe | None = None,
+        config_data: Mapping[str, object] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
         self.spec = spec
@@ -172,6 +173,7 @@ class OffPolicyTrainer:
         self.update_plan = update_plan
         self.device = torch.device(device)
         self.recipe = recipe
+        self.config_data = deepcopy(dict(config_data)) if config_data is not None else None
         self.rng = rng or np.random.default_rng()
 
     @classmethod
@@ -263,16 +265,20 @@ class OffPolicyTrainer:
 
         return {
             "algorithm": deepcopy(dict(self.algorithm.state_dict())),
+            "config": deepcopy(self.config_data),
             "update_plan": self.update_plan.state_dict(),
             "replay": self.replay.state_dict(),
-            "recipe": recipe_to_dict(self.recipe),
+            "recipe": recipe_to_dict(self.recipe) if self.recipe is not None else None,
             "rng": deepcopy(self.rng.bit_generator.state),
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
         from marl.recipes import recipe_to_dict
 
-        if state.get("recipe") != recipe_to_dict(self.recipe):
+        if state.get("config") != self.config_data:
+            raise ValueError("checkpoint config 与当前 trainer config 不一致")
+        current_recipe = recipe_to_dict(self.recipe) if self.recipe is not None else None
+        if state.get("recipe") != current_recipe:
             raise ValueError("checkpoint recipe 与当前 trainer recipe 不一致")
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
         self.update_plan.load_state_dict(cast(Mapping[str, Any], state["update_plan"]))

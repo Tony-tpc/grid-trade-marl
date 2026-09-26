@@ -19,6 +19,9 @@ Category = Literal["policy", "critic", "mixer"]
 class Buildable(Protocol[T_co]):
     """配置只需暴露 build；内置与外部实现共享这个很小的接口。"""
 
+    @property
+    def kind(self) -> str: ...
+
     def build(self, spec: EnvironmentSpec) -> T_co: ...
 
 
