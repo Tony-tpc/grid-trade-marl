@@ -1,5 +1,13 @@
 """与具体算法解耦的经验采集和参数更新组件。"""
 
+from marl.training.off_policy import (
+    OffPolicyAlgorithm,
+    OffPolicyOptimizerConfig,
+    OffPolicyTrainer,
+    OffPolicyUpdateConfig,
+    OffPolicyUpdatePlan,
+    ReplayConfig,
+)
 from marl.training.on_policy import (
     LossComputingModule,
     OnPolicyActorCritic,
@@ -12,10 +20,16 @@ from marl.training.on_policy import (
 
 __all__ = [
     "LossComputingModule",
+    "OffPolicyAlgorithm",
+    "OffPolicyOptimizerConfig",
+    "OffPolicyTrainer",
+    "OffPolicyUpdateConfig",
+    "OffPolicyUpdatePlan",
     "OnPolicyActorCritic",
     "OnPolicyTrainer",
     "PPOUpdateConfig",
     "PPOUpdatePlan",
     "PreparedRollout",
+    "ReplayConfig",
     "RolloutBuffer",
 ]

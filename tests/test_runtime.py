@@ -1,16 +1,23 @@
+from dataclasses import replace
+
 import numpy as np
 import torch
 
-from marl.algorithms import MAAC, MAACConfig
+from marl.algorithms import MAAC, default_maac_recipe
+from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
     EnergyTradingAdapter,
     EnergyTradingConfig,
     EnergyTradingEnv,
+    EnvironmentSpec,
+    RewardStructure,
     Transition,
     transitions_to_batch,
 )
+from marl.recipes import ComponentRecipe
 from marl.runtime import TensorReplayBuffer
+from marl.training import OffPolicyTrainer
 
 
 def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
@@ -40,32 +47,53 @@ def test_tensor_replay_matches_transition_batch_after_wraparound() -> None:
         "actions",
         "rewards",
         "next_observations",
-        "dones",
+        "terminated",
+        "truncated",
         "state",
         "next_state",
         "action_mask",
         "next_action_mask",
     ):
         assert torch.equal(getattr(sample, name), getattr(expected, name))
-    assert torch.equal(sample.extras["terminated"], expected.extras["terminated"])
-    assert torch.equal(sample.extras["truncated"], expected.extras["truncated"])
 
 
-def test_optimize_async_metrics_updates_parameters_and_reports_metrics() -> None:
-    algorithm = MAAC(MAACConfig(2, 3, 4, hidden_dim=16))
-    optimizer = torch.optim.Adam(algorithm.parameters(), lr=1e-3)
-    from marl.core import MARLBatch
-
+def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
+    spec = EnvironmentSpec(
+        2,
+        3,
+        4,
+        6,
+        ActionKind.DISCRETE,
+        8,
+        RewardStructure.INDIVIDUAL,
+    )
+    recipe = default_maac_recipe()
+    recipe = replace(
+        recipe,
+        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
+        critic=ComponentRecipe(
+            "attention_q", {"hidden_dim": 16, "attention_heads": 4}
+        ),
+        experience=ComponentRecipe("replay", {"capacity": 8, "batch_size": 4}),
+        update=ComponentRecipe(
+            "off_policy_update",
+            {"learning_rate": 1e-3, "max_grad_norm": 0.5},
+        ),
+    )
+    algorithm = MAAC.from_recipe(spec, recipe)
+    trainer = OffPolicyTrainer.from_recipe(spec, algorithm, recipe)
     observations = torch.randn(4, 2, 3)
     batch = MARLBatch(
         observations=observations,
         actions=torch.randint(0, 4, (4, 2)),
         rewards=torch.randn(4, 2),
         next_observations=torch.randn_like(observations),
+        terminated=torch.zeros(4, 2, dtype=torch.bool),
+        truncated=torch.zeros(4, 2, dtype=torch.bool),
     )
-    parameter = next(algorithm.actors[0].parameters())
+    parameter = next(algorithm.policy.actors[0].parameters())
     before = parameter.detach().clone()
-    metrics = algorithm.optimize(batch, optimizer, sync_metrics=False)
+    metrics = trainer.update_batch(batch)
     after = parameter.detach()
     assert not torch.equal(before, after)
-    assert np.isfinite(algorithm.metrics_to_cpu(metrics)["loss"])
+    assert np.isfinite(metrics["loss"])

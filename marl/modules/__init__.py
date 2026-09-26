@@ -6,16 +6,25 @@ from marl.modules.action_head import (
     GaussianActionHead,
 )
 from marl.modules.actor import Actor
-from marl.modules.critic import CentralizedCritic, ValueCritic
+from marl.modules.critic import (
+    AttentionCritic,
+    CentralizedCritic,
+    IndependentCentralizedCritics,
+    TwinIndependentCentralizedCritics,
+    ValueCritic,
+)
 from marl.modules.mixer import QMixer, VDNMixer
 
 __all__ = [
     "Actor",
+    "AttentionCritic",
     "CentralizedCritic",
     "DeterministicActionHead",
     "DiscreteActionHead",
     "GaussianActionHead",
+    "IndependentCentralizedCritics",
     "QMixer",
+    "TwinIndependentCentralizedCritics",
     "VDNMixer",
     "ValueCritic",
 ]

@@ -66,7 +66,8 @@ def _index_batch(batch: MARLBatch, indices: Tensor) -> MARLBatch:
         actions=_index_optional(batch.actions, indices),
         rewards=_index_optional(batch.rewards, indices),
         next_observations=_index_optional(batch.next_observations, indices),
-        dones=_index_optional(batch.dones, indices),
+        terminated=_index_optional(batch.terminated, indices),
+        truncated=_index_optional(batch.truncated, indices),
         state=_index_optional(batch.state, indices),
         next_state=_index_optional(batch.next_state, indices),
         action_mask=_index_optional(batch.action_mask, indices),
@@ -197,7 +198,8 @@ class RolloutBuffer:
             observations=self.observations.reshape(flat, *self.observations.shape[2:]),
             actions=self.actions.reshape(flat, *self.actions.shape[2:]),
             rewards=self.rewards.reshape(flat, self.spec.num_agents),
-            dones=(self.terminated | self.truncated).reshape(flat, self.spec.num_agents),
+            terminated=self.terminated.reshape(flat, self.spec.num_agents),
+            truncated=self.truncated.reshape(flat, self.spec.num_agents),
             state=self.states.reshape(flat, self.spec.state_dim),
             action_mask=(
                 self.action_masks.reshape(flat, self.spec.num_agents, self.spec.action_dim)
@@ -209,8 +211,6 @@ class RolloutBuffer:
                 "old_values": self.old_values.reshape(flat, self.spec.num_agents).clone(),
                 "advantages": advantages.reshape(flat, self.spec.num_agents),
                 "returns": returns.reshape(flat, self.spec.num_agents),
-                "terminated": self.terminated.reshape(flat, self.spec.num_agents).clone(),
-                "truncated": self.truncated.reshape(flat, self.spec.num_agents).clone(),
             },
         )
         return PreparedRollout(batch)
@@ -346,7 +346,7 @@ class OnPolicyTrainer:
         generator: torch.Generator | None = None,
     ) -> OnPolicyTrainer:
         # 延迟导入防止训练组件与 recipe/内置工厂形成循环依赖。
-        from marl.builtins import OptimizerConfig, RolloutConfig
+        from marl.builtins import PPOOptimizerConfig, RolloutConfig
         from marl.recipes import compile_recipe
         from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentKind
 
@@ -374,7 +374,7 @@ class OnPolicyTrainer:
             ),
         )
         optimizer_config = cast(
-            OptimizerConfig,
+            PPOOptimizerConfig,
             selected_registry.build(
                 ComponentKind.UPDATE_PLAN,
                 recipe.update.type,

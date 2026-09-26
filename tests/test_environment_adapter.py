@@ -1,10 +1,19 @@
 """验证论文环境到算法协议的边界，避免更换环境时改动算法。"""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 import torch
 
-from marl.algorithms import MAAC, QMIX
+from marl.algorithms import (
+    MAAC,
+    MASAC,
+    QMIX,
+    default_maac_recipe,
+    default_masac_recipe,
+    default_qmix_recipe,
+)
 from marl.envs import (
     ActionKind,
     EnergyProfiles,
@@ -16,12 +25,13 @@ from marl.envs import (
     EnvironmentStep,
     RewardStructure,
     Transition,
-    algorithm_config_from_env,
     transitions_to_batch,
 )
+from marl.recipes import ComponentRecipe
+from marl.training import OffPolicyTrainer
 
 
-def test_energy_adapter_generates_config_and_trainable_batch() -> None:
+def test_energy_adapter_builds_recipe_algorithm_and_trainable_batch() -> None:
     config = EnergyTradingConfig(num_agents=2, has_sa=(True, False))
     adapter = EnergyTradingAdapter(EnergyTradingEnv(config), ActionKind.DISCRETE)
     spec = adapter.spec
@@ -47,16 +57,23 @@ def test_energy_adapter_generates_config_and_trainable_batch() -> None:
     assert batch.rewards is not None and batch.rewards.shape == (3, 2)
     assert batch.state is not None and batch.state.shape == (3, spec.state_dim)
 
-    algo_config = algorithm_config_from_env("maac", spec, hidden_dim=16)
-    algorithm = MAAC(algo_config)
-    optimizer = torch.optim.Adam(algorithm.parameters(), lr=1e-3)
-    metrics = algorithm.optimize(batch, optimizer)
+    recipe = replace(
+        default_maac_recipe(),
+        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
+        critic=ComponentRecipe(
+            "attention_q", {"hidden_dim": 16, "attention_heads": 4}
+        ),
+        experience=ComponentRecipe("replay", {"capacity": 8, "batch_size": 3}),
+    )
+    algorithm = MAAC.from_recipe(spec, recipe)
+    trainer = OffPolicyTrainer.from_recipe(spec, algorithm, recipe)
+    metrics = trainer.update_batch(batch)
     assert np.isfinite(metrics["loss"])
 
-    with pytest.raises(ValueError, match="需要 continuous"):
-        algorithm_config_from_env("masac", spec)
-    with pytest.raises(ValueError, match="共享同一个团队奖励"):
-        algorithm_config_from_env("qmix", spec)
+    with pytest.raises(ValueError, match="不支持 discrete"):
+        MASAC.from_recipe(spec, default_masac_recipe())
+    with pytest.raises(ValueError, match="不支持 individual"):
+        QMIX.from_recipe(spec, default_qmix_recipe())
 
 
 def test_market_settlement_conserves_external_cash_flow() -> None:
@@ -112,14 +129,11 @@ def test_new_environment_dimensions_only_change_adapter_spec() -> None:
     large = EnergyTradingAdapter(
         EnergyTradingEnv(EnergyTradingConfig(num_agents=4, history_steps=8)), ActionKind.DISCRETE
     )
-    small_config = algorithm_config_from_env("maac", small.spec)
-    large_config = algorithm_config_from_env("maac", large.spec)
-    assert (small_config.num_agents, small_config.observation_dim) != (
-        large_config.num_agents,
-        large_config.observation_dim,
-    )
-    assert isinstance(MAAC(small_config), MAAC)
-    assert isinstance(MAAC(large_config), MAAC)
+    small_algorithm = MAAC.from_recipe(small.spec, default_maac_recipe())
+    large_algorithm = MAAC.from_recipe(large.spec, default_maac_recipe())
+    assert small_algorithm.spec != large_algorithm.spec
+    assert len(small_algorithm.policy.actors) == 2
+    assert len(large_algorithm.policy.actors) == 4
 
 
 def test_different_paper_adapter_uses_same_algorithm_and_batch_contract() -> None:
@@ -156,12 +170,12 @@ def test_different_paper_adapter_uses_same_algorithm_and_batch_contract() -> Non
             )
 
     adapter = OtherPaperAdapter()
-    algorithm = QMIX(algorithm_config_from_env("qmix", adapter.spec, hidden_dim=16))
+    algorithm = QMIX.from_recipe(adapter.spec, default_qmix_recipe())
     current = adapter.reset()
     actions = algorithm.act(torch.as_tensor(current.observations).unsqueeze(0))[0].numpy()
     following = adapter.step(actions)
     batch = transitions_to_batch([Transition(current, actions, following)])
-    assert algorithm.compute_loss(batch)["loss"].ndim == 0
+    assert algorithm.compute_loss_bundle(batch).total.ndim == 0
 
     with pytest.raises(ValueError, match="observations 形状"):
         adapter.validate_step(

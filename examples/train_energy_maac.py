@@ -8,21 +8,23 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from typing import cast
 
 import numpy as np
 import torch
 
-from marl.algorithms import MAAC, MAACConfig
+from marl.algorithms import MAAC, default_maac_recipe
 from marl.envs import (
     ActionKind,
     EnergyTradingAdapter,
     EnergyTradingConfig,
     EnergyTradingEnv,
     Transition,
-    algorithm_config_from_env,
 )
-from marl.runtime import SyncVectorEnv, TensorReplayBuffer, resolve_device
+from marl.recipes import ComponentRecipe
+from marl.runtime import SyncVectorEnv, resolve_device
+from marl.training import OffPolicyTrainer
 
 
 def main() -> None:
@@ -53,17 +55,35 @@ def main() -> None:
         ]
     )
     device = resolve_device(args.device)
-    # 环境适配器决定 N/O/A；MAAC 本身不关心电力市场或设备的内部实现。
-    config = cast(
-        MAACConfig,
-        algorithm_config_from_env("maac", vector_env.spec, hidden_dim=args.hidden_dim),
+    recipe = replace(
+        default_maac_recipe(),
+        policy=ComponentRecipe(
+            "independent_discrete", {"hidden_dim": args.hidden_dim}
+        ),
+        critic=ComponentRecipe(
+            "attention_q",
+            {"hidden_dim": args.hidden_dim, "attention_heads": 4},
+        ),
+        experience=ComponentRecipe(
+            "replay", {"capacity": 5000, "batch_size": args.batch_size}
+        ),
+        update=ComponentRecipe(
+            "off_policy_update",
+            {
+                "learning_rate": 3e-4,
+                "max_grad_norm": 10.0,
+                "amp_dtype": "bf16" if args.amp == "bf16" else None,
+            },
+        ),
     )
-    algorithm = MAAC(config).to(device)
-    optimizer = torch.optim.Adam(
-        algorithm.parameters(), lr=3e-4, fused=device.type == "cuda"
+    algorithm = MAAC.from_recipe(vector_env.spec, recipe).to(device)
+    trainer = OffPolicyTrainer.from_recipe(
+        vector_env.spec,
+        algorithm,
+        recipe,
+        device=device,
+        rng=rng,
     )
-    amp_dtype = torch.bfloat16 if args.amp == "bf16" else None
-    replay = TensorReplayBuffer(vector_env.spec, capacity=5000)
     print(f"device={device} amp={args.amp} num_envs={args.num_envs}")
 
     for episode in range(args.episodes):
@@ -73,7 +93,7 @@ def main() -> None:
         individual_returns = np.zeros((args.num_envs, vector_env.spec.num_agents))
         episode_cost = np.zeros(args.num_envs)
         epsilon = max(0.1, 0.8 - 0.7 * episode / max(args.episodes - 1, 1))
-        metrics: dict[str, torch.Tensor] | None = None
+        metrics: dict[str, float] | None = None
         while not all(step.done for step in current):
             masks = np.stack([cast(np.ndarray, step.action_mask) for step in current])
             explore = rng.random(args.num_envs) < epsilon
@@ -95,21 +115,18 @@ def main() -> None:
 
             next_steps = vector_env.step(actions)
             for env_index, next_step in enumerate(next_steps):
-                replay.add(Transition(current[env_index], actions[env_index], next_step))
+                trainer.record(
+                    Transition(current[env_index], actions[env_index], next_step)
+                )
                 individual_returns[env_index] += next_step.rewards
                 episode_cost[env_index] += next_step.info["community_energy_cost"]
             current = next_steps
 
-            if len(replay) >= args.batch_size:
-                batch = replay.sample(args.batch_size, rng, device=device)
-                metrics = algorithm.optimize(
-                    batch, optimizer, amp_dtype=amp_dtype, sync_metrics=False
-                )
+            if trainer.ready:
+                metrics = trainer.update()
 
         loss_text = (
-            f"{algorithm.metrics_to_cpu(metrics)['loss']:.3f}"
-            if metrics is not None
-            else "no_update"
+            f"{metrics['loss']:.3f}" if metrics is not None else "no_update"
         )
         print(
             f"round={episode + 1} episodes={args.num_envs} steps={vector_env.spec.horizon} "

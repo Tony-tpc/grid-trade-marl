@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 import torch
 
-from marl.algorithms import MAPPO, MAPPOConfig
+from marl.algorithms import MAPPO
 from marl.algorithms.mappo import default_mappo_recipe
 from marl.core import MARLBatch
 from marl.envs import (
@@ -35,11 +35,11 @@ def environment_spec() -> EnvironmentSpec:
 
 
 def training_recipe() -> AlgorithmRecipe:
-    recipe = default_mappo_recipe(
-        MAPPOConfig(2, 3, 4, state_dim=6, hidden_dim=16)
-    )
+    recipe = default_mappo_recipe()
     return replace(
         recipe,
+        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 16}),
+        critic=ComponentRecipe("centralized_value", {"hidden_dim": 16}),
         experience=ComponentRecipe("rollout", {"horizon": 3}),
         update=ComponentRecipe(
             "ppo_update",
@@ -67,23 +67,24 @@ def sample_batch() -> MARLBatch:
     )
 
 
-def test_recipe_mappo_matches_direct_constructor_with_fixed_seed() -> None:
-    config = MAPPOConfig(2, 3, 4, state_dim=6, hidden_dim=16)
+def test_recipe_construction_is_reproducible_with_fixed_seed() -> None:
+    recipe = training_recipe()
     torch.manual_seed(41)
-    direct = MAPPO(config)
+    first = MAPPO.from_recipe(environment_spec(), recipe)
     torch.manual_seed(41)
-    assembled = MAPPO.from_recipe(environment_spec(), default_mappo_recipe(config))
+    second = MAPPO.from_recipe(environment_spec(), recipe)
     batch = sample_batch()
 
     assert torch.allclose(
-        direct._policy_logits(batch.observations, batch.action_mask),
-        assembled._policy_logits(batch.observations, batch.action_mask),
+        first.policy.logits(batch.observations, batch.action_mask),
+        second.policy.logits(batch.observations, batch.action_mask),
     )
-    assert torch.allclose(direct.critic(batch.state), assembled.critic(batch.state))
-    direct_losses = direct.compute_loss(batch)
-    assembled_losses = assembled.compute_loss(batch)
-    for name in direct_losses:
-        assert torch.allclose(direct_losses[name], assembled_losses[name])
+    assert torch.allclose(first.critic(batch.state), second.critic(batch.state))
+    first_bundle = first.compute_loss_bundle(batch)
+    second_bundle = second.compute_loss_bundle(batch)
+    assert torch.allclose(first_bundle.total, second_bundle.total)
+    for name in first_bundle.terms:
+        assert torch.allclose(first_bundle.terms[name], second_bundle.terms[name])
 
 
 def test_recipe_rejects_wrong_algorithm_and_invalid_shapes() -> None:

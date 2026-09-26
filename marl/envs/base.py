@@ -125,9 +125,8 @@ def transitions_to_batch(
 ) -> MARLBatch:
     """把多步经验转换成算法统一读取的 MARLBatch。
 
-    ``terminated`` 会停止 Bellman bootstrap；``truncated`` 表示时间限制。
-    目前算法只读取 ``dones``，因此这里保守地把两者都作为 episode 边界，
-    同时将原始标志放入 extras，便于以后加入 time-limit bootstrap。
+    ``terminated`` 会停止 Bellman bootstrap；``truncated`` 只表示时间限制边界。
+    二者作为 MARLBatch 的一等字段传递，算法不得重新合并成模糊的 done。
     """
 
     if not transitions:
@@ -169,7 +168,8 @@ def transitions_to_batch(
         actions=torch.as_tensor(action_array, dtype=action_dtype, device=device),
         rewards=stack("rewards", next_step=True),
         next_observations=stack("observations", next_step=True),
-        dones=terminated | truncated,
+        terminated=terminated,
+        truncated=truncated,
         state=stack("state"),
         next_state=stack("state", next_step=True),
         action_mask=(
@@ -182,5 +182,4 @@ def transitions_to_batch(
             if present_next_masks
             else None
         ),
-        extras={"terminated": terminated, "truncated": truncated},
     )

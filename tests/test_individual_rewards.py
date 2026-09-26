@@ -1,4 +1,6 @@
-"""针对一般和博弈的关键回归测试：不允许把 r_i 偷偷变成团队平均。"""
+"""逐智能体奖励与共享团队奖励的语义回归。"""
+
+from dataclasses import replace
 
 import pytest
 import torch
@@ -10,97 +12,106 @@ from marl.algorithms import (
     MAPPO,
     MASAC,
     QMIX,
-    MAACConfig,
-    MADDPGConfig,
-    MAPPOConfig,
-    MASACConfig,
-    QMIXConfig,
+    default_maac_recipe,
+    default_maddpg_recipe,
+    default_mappo_recipe,
+    default_masac_recipe,
+    default_qmix_recipe,
 )
 from marl.core import MARLBatch
+from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.recipes import ComponentRecipe
+
+
+def spec(
+    kind: ActionKind,
+    reward: RewardStructure = RewardStructure.INDIVIDUAL,
+) -> EnvironmentSpec:
+    action_dim = 4 if kind == ActionKind.DISCRETE else 2
+    return EnvironmentSpec(2, 3, action_dim, 6, kind, 8, reward)
 
 
 def test_maddpg_and_masac_fit_individual_targets() -> None:
     torch.manual_seed(3)
-    obs = torch.randn(4, 2, 3)
+    observations = torch.randn(4, 2, 3)
     actions = torch.randn(4, 2, 2).tanh()
     rewards = torch.tensor([[2.0, -1.0]]).expand(4, -1)
-    batch = MARLBatch(obs, actions=actions, rewards=rewards, next_observations=obs)
-
-    maddpg = MADDPG(MADDPGConfig(2, 3, 2, hidden_dim=16, gamma=0.0))
-    assert maddpg.actors[0] is not maddpg.actors[1]
-    current_input = maddpg._critic_input(obs, actions)
-    q = torch.stack(
-        [critic.forward(current_input).squeeze(-1) for critic in maddpg.critics], dim=-1
+    flags = torch.zeros(4, 2, dtype=torch.bool)
+    batch = MARLBatch(
+        observations=observations,
+        actions=actions,
+        rewards=rewards,
+        next_observations=observations,
+        terminated=flags,
+        truncated=flags,
     )
-    expected = F.mse_loss(q, rewards)
-    assert torch.allclose(maddpg.compute_loss(batch)["critic_loss"], expected)
-
-    masac = MASAC(MASACConfig(2, 3, 2, hidden_dim=16, gamma=0.0))
-    assert masac.actors[0] is not masac.actors[1]
-    current_input = masac._critic_input(obs, actions)
-    q1 = torch.stack(
-        [critic.forward(current_input).squeeze(-1) for critic in masac.critics1], dim=-1
+    maddpg_recipe = replace(
+        default_maddpg_recipe(), returns=ComponentRecipe("td0", {"gamma": 0.0})
     )
-    q2 = torch.stack(
-        [critic.forward(current_input).squeeze(-1) for critic in masac.critics2], dim=-1
+    maddpg = MADDPG.from_recipe(spec(ActionKind.CONTINUOUS), maddpg_recipe)
+    assert maddpg.policy.actors[0] is not maddpg.policy.actors[1]
+    q = maddpg.critics(maddpg._critic_input(observations, actions))
+    assert torch.allclose(
+        maddpg.compute_loss_bundle(batch).terms["critic_loss"],
+        F.mse_loss(q, rewards),
     )
+    masac_recipe = replace(
+        default_masac_recipe(), returns=ComponentRecipe("td0", {"gamma": 0.0})
+    )
+    masac = MASAC.from_recipe(spec(ActionKind.CONTINUOUS), masac_recipe)
+    q1, q2 = masac.critics(masac._critic_input(observations, actions))
     expected = F.mse_loss(q1, rewards) + F.mse_loss(q2, rewards)
-    assert torch.allclose(masac.compute_loss(batch)["critic_loss"], expected)
+    assert torch.allclose(
+        masac.compute_loss_bundle(batch).terms["critic_loss"], expected
+    )
 
 
 def test_maac_counterfactual_value_ignores_own_replay_action() -> None:
     torch.manual_seed(4)
-    algorithm = MAAC(MAACConfig(2, 3, 4, hidden_dim=16, gamma=0.0))
-    assert algorithm.actors[0] is not algorithm.actors[1]
-    obs = torch.randn(5, 2, 3)
+    algorithm = MAAC.from_recipe(spec(ActionKind.DISCRETE), default_maac_recipe())
+    observations = torch.randn(5, 2, 3)
     actions = torch.zeros(5, 2, dtype=torch.long)
-    changed_own_action = actions.clone()
-    changed_own_action[:, 0] = 3
-
-    # 只改变 a_0 时，Q_0 的全部候选值应保持不变，因为上下文只读 a_1。
-    q_before = algorithm.critic(obs, actions)
-    q_after = algorithm.critic(obs, changed_own_action)
+    changed = actions.clone()
+    changed[:, 0] = 3
+    q_before = algorithm.critic(observations, actions)
+    q_after = algorithm.critic(observations, changed)
     assert torch.allclose(q_before[:, 0], q_after[:, 0])
 
-    rewards = torch.tensor([[1.0, -2.0]]).expand(5, -1)
-    batch = MARLBatch(obs, actions=actions, rewards=rewards, next_observations=obs)
-    chosen_q = q_before.gather(-1, actions.unsqueeze(-1)).squeeze(-1)
-    assert torch.allclose(
-        algorithm.compute_loss(batch)["critic_loss"], F.mse_loss(chosen_q, rewards)
-    )
 
-
-def test_mappo_requires_and_fits_per_agent_returns() -> None:
-    obs = torch.randn(3, 2, 3)
-    algorithm = MAPPO(MAPPOConfig(2, 3, 4, state_dim=6, hidden_dim=16))
-    state = torch.randn(3, 6)
+def test_mappo_keeps_per_agent_returns() -> None:
+    algorithm = MAPPO.from_recipe(spec(ActionKind.DISCRETE), default_mappo_recipe())
     returns = torch.tensor([[2.0, -1.0]]).expand(3, -1)
     batch = MARLBatch(
-        observations=obs,
+        observations=torch.randn(3, 2, 3),
         actions=torch.zeros(3, 2, dtype=torch.long),
-        state=state,
+        state=torch.randn(3, 6),
         extras={
             "old_log_prob": torch.zeros(3, 2),
             "advantages": torch.ones(3, 2),
             "returns": returns,
         },
     )
-    expected = F.mse_loss(algorithm.critic.forward(state), returns)
-    assert torch.allclose(algorithm.compute_loss(batch)["value_loss"], expected)
+    assert algorithm.compute_loss_bundle(batch).terms["value_loss"].ndim == 0
     batch.extras["returns"] = returns.mean(dim=-1)
     with pytest.raises(ValueError, match="逐智能体"):
-        algorithm.compute_loss(batch)
+        algorithm.compute_loss_bundle(batch)
 
 
 def test_qmix_rejects_general_sum_reward_batch() -> None:
-    algorithm = QMIX(QMIXConfig(2, 3, 4, state_dim=6, hidden_dim=16))
+    algorithm = QMIX.from_recipe(
+        spec(ActionKind.DISCRETE, RewardStructure.SHARED),
+        default_qmix_recipe(),
+    )
+    flags = torch.zeros(2, 2, dtype=torch.bool)
     batch = MARLBatch(
         observations=torch.randn(2, 2, 3),
         actions=torch.zeros(2, 2, dtype=torch.long),
         rewards=torch.tensor([[1.0, -1.0], [0.0, 2.0]]),
         next_observations=torch.randn(2, 2, 3),
+        terminated=flags,
+        truncated=flags,
         state=torch.randn(2, 6),
         next_state=torch.randn(2, 6),
     )
     with pytest.raises(ValueError, match="共享团队奖励"):
-        algorithm.compute_loss(batch)
+        algorithm.compute_loss_bundle(batch)

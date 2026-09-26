@@ -133,14 +133,71 @@ class TensorReplayBuffer:
             actions=take(self.actions),
             rewards=take(self.rewards),
             next_observations=take(self.next_observations),
-            dones=terminated | truncated,
+            terminated=terminated,
+            truncated=truncated,
             state=take(self.states),
             next_state=take(self.next_states),
             action_mask=take(self.action_masks) if self.action_masks is not None else None,
             next_action_mask=(
                 take(self.next_action_masks) if self.next_action_masks is not None else None
             ),
-            extras={"terminated": terminated, "truncated": truncated},
         )
         return batch.to(device, non_blocking=True)
 
+    def state_dict(self) -> dict[str, object]:
+        """保存完整环形缓冲区，以便 checkpoint 后精确继续离策略训练。"""
+
+        state: dict[str, object] = {
+            "spec": self.spec,
+            "capacity": self.capacity,
+            "size": self.size,
+            "position": self.position,
+        }
+        for name in (
+            "observations",
+            "next_observations",
+            "states",
+            "next_states",
+            "actions",
+            "rewards",
+            "terminated",
+            "truncated",
+            "action_masks",
+            "next_action_masks",
+        ):
+            value = getattr(self, name)
+            state[name] = value.clone() if value is not None else None
+        return state
+
+    def load_state_dict(self, state: dict[str, object]) -> None:
+        if state.get("spec") != self.spec or state.get("capacity") != self.capacity:
+            raise ValueError("replay checkpoint 的 EnvironmentSpec 或 capacity 不一致")
+        size = state.get("size")
+        position = state.get("position")
+        if not isinstance(size, int) or not isinstance(position, int):
+            raise TypeError("replay checkpoint 缺少合法 size/position")
+        if not 0 <= size <= self.capacity or not 0 <= position < self.capacity:
+            raise ValueError("replay checkpoint 的 size/position 越界")
+        for name in (
+            "observations",
+            "next_observations",
+            "states",
+            "next_states",
+            "actions",
+            "rewards",
+            "terminated",
+            "truncated",
+            "action_masks",
+            "next_action_masks",
+        ):
+            target = getattr(self, name)
+            source = state.get(name)
+            if target is None:
+                if source is not None:
+                    raise ValueError(f"replay checkpoint 不应包含 {name}")
+            elif not isinstance(source, Tensor) or source.shape != target.shape:
+                raise ValueError(f"replay checkpoint 的 {name} 形状不一致")
+            else:
+                target.copy_(source)
+        self.size = size
+        self.position = position

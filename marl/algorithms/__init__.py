@@ -1,24 +1,22 @@
-"""算法层：训练目标、target network 与参数更新。"""
+"""具体算法薄装配类及其默认 recipe。"""
 
-from marl.algorithms.base import AlgorithmConfig, BaseMARLAlgorithm
-from marl.algorithms.maac import MAAC, MAACConfig
-from marl.algorithms.maddpg import MADDPG, MADDPGConfig
-from marl.algorithms.mappo import MAPPO, MAPPOConfig, default_mappo_recipe
-from marl.algorithms.masac import MASAC, MASACConfig
-from marl.algorithms.qmix import QMIX, QMIXConfig
+from marl.algorithms.base import BaseMARLAlgorithm
+from marl.algorithms.maac import MAAC, default_maac_recipe
+from marl.algorithms.maddpg import MADDPG, default_maddpg_recipe
+from marl.algorithms.mappo import MAPPO, default_mappo_recipe
+from marl.algorithms.masac import MASAC, default_masac_recipe
+from marl.algorithms.qmix import QMIX, default_qmix_recipe
 
 __all__ = [
-    "AlgorithmConfig",
     "BaseMARLAlgorithm",
     "MAAC",
-    "MAACConfig",
     "MADDPG",
-    "MADDPGConfig",
     "MAPPO",
-    "MAPPOConfig",
-    "default_mappo_recipe",
     "MASAC",
-    "MASACConfig",
     "QMIX",
-    "QMIXConfig",
+    "default_maac_recipe",
+    "default_maddpg_recipe",
+    "default_mappo_recipe",
+    "default_masac_recipe",
+    "default_qmix_recipe",
 ]

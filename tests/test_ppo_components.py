@@ -3,15 +3,16 @@ from __future__ import annotations
 import torch
 from torch.distributions import Categorical
 
-from marl.algorithms import MAPPO, MAPPOConfig
+from marl.algorithms import MAPPO, default_mappo_recipe
 from marl.core import MARLBatch
+from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.objectives import (
     EntropyObjective,
     LossBundle,
     PPOClipObjective,
     ValueMSEObjective,
 )
-from marl.returns import GAEEstimator
+from marl.returns import GAEEstimator, TD0Estimator
 
 
 def test_ppo_clips_positive_and_negative_advantages() -> None:
@@ -67,9 +68,23 @@ def test_gae_keeps_individual_agent_returns_and_normalizes_advantage() -> None:
     assert torch.allclose(advantages.var(unbiased=False), torch.tensor(1.0), atol=1e-6)
 
 
-def test_extracted_objectives_match_existing_mappo_loss() -> None:
+def test_td0_bootstraps_truncation_but_not_termination() -> None:
+    estimator = TD0Estimator(gamma=0.9)
+    rewards = torch.ones(1, 2)
+    next_values = torch.full((1, 2), 10.0)
+    terminated = torch.tensor([[True, False]])
+    assert torch.allclose(
+        estimator.estimate(rewards, next_values, terminated),
+        torch.tensor([[1.0, 10.0]]),
+    )
+
+
+def test_extracted_objectives_match_mappo_bundle() -> None:
     torch.manual_seed(7)
-    algorithm = MAPPO(MAPPOConfig(2, 3, 4, state_dim=6, hidden_dim=16))
+    spec = EnvironmentSpec(
+        2, 3, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.INDIVIDUAL
+    )
+    algorithm = MAPPO.from_recipe(spec, default_mappo_recipe())
     observations = torch.randn(5, 2, 3)
     state = torch.randn(5, 6)
     actions = torch.randint(0, 4, (5, 2))
@@ -86,21 +101,23 @@ def test_extracted_objectives_match_existing_mappo_loss() -> None:
             "returns": returns,
         },
     )
-    existing = algorithm.compute_loss(batch)
+    existing = algorithm.compute_loss_bundle(batch)
 
-    distribution = Categorical(logits=algorithm._policy_logits(observations, None))
+    distribution = Categorical(logits=algorithm.policy.logits(observations))
     values = algorithm.critic(state)
     bundle = LossBundle.combine(
         (
-            PPOClipObjective(algorithm.cfg.clip_ratio)(
+            PPOClipObjective(algorithm.policy_objective.clip_ratio)(
                 distribution.log_prob(actions), old_log_prob, advantages
             ),
-            ValueMSEObjective(algorithm.cfg.value_coef)(values, returns),
-            EntropyObjective(algorithm.cfg.entropy_coef)(distribution.entropy()),
+            ValueMSEObjective(algorithm.value_objective.coefficient)(values, returns),
+            EntropyObjective(algorithm.entropy_objective.coefficient)(
+                distribution.entropy()
+            ),
         )
     )
 
-    assert torch.allclose(bundle.total, existing["loss"])
-    assert torch.allclose(bundle.terms["policy_loss"], existing["actor_loss"])
-    assert torch.allclose(bundle.terms["value_loss"], existing["value_loss"])
-    assert torch.allclose(bundle.terms["entropy"], existing["entropy"])
+    assert torch.allclose(bundle.total, existing.total)
+    assert torch.allclose(bundle.terms["policy_loss"], existing.terms["policy_loss"])
+    assert torch.allclose(bundle.terms["value_loss"], existing.terms["value_loss"])
+    assert torch.allclose(bundle.terms["entropy"], existing.terms["entropy"])

@@ -1,86 +1,106 @@
-"""一般和博弈版多智能体 SAC，每个智能体有自己的策略与 Q 值。"""
+"""组合式一般和博弈多智能体 SAC。"""
 
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
-from marl.algorithms.base import AlgorithmConfig, BaseMARLAlgorithm
-from marl.core.batch import MARLBatch
-from marl.models.mlp import MLPBackbone
-from marl.modules.action_head import GaussianActionHead
-from marl.modules.actor import Actor
-from marl.modules.critic import CentralizedCritic
+from marl.algorithms.assembly import assemble_algorithm_components, require_one
+from marl.algorithms.base import BaseMARLAlgorithm
+from marl.core import MARLBatch
+from marl.envs.base import EnvironmentSpec
+from marl.modules.critic import TwinIndependentCentralizedCritics
+from marl.objectives import (
+    LossBundle,
+    ObjectiveResult,
+    SACEntropyObjective,
+    TDLossObjective,
+)
+from marl.policies import IndependentGaussianPolicy
+from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
+from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
+from marl.returns import TD0Estimator
+from marl.training.gradients import frozen_parameters
 
 
-@dataclass(frozen=True, slots=True)
-class MASACConfig(AlgorithmConfig):
-    num_agents: int = 2
-    observation_dim: int = 16
-    action_dim: int = 2
-    hidden_dim: int = 128
-    initial_alpha: float = 0.2
-    target_entropy: float | None = None
+def default_masac_recipe() -> AlgorithmRecipe:
+    return AlgorithmRecipe(
+        schema_version=1,
+        algorithm="masac",
+        policy=ComponentRecipe("independent_gaussian", {"hidden_dim": 128}),
+        critic=ComponentRecipe(
+            "twin_independent_centralized_q", {"hidden_dim": 128}
+        ),
+        objectives=(
+            ComponentRecipe("td_mse", {}),
+            ComponentRecipe(
+                "sac_entropy", {"initial_alpha": 0.2, "target_entropy": None}
+            ),
+        ),
+        returns=ComponentRecipe("td0", {"gamma": 0.99}),
+        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
+        update=ComponentRecipe(
+            "off_policy_update",
+            {"learning_rate": 3e-4, "max_grad_norm": 10.0},
+        ),
+        target_update=ComponentRecipe("soft", {"tau": 0.005}),
+    )
 
 
 class MASAC(BaseMARLAlgorithm):
-    """独立随机 Actor、每个智能体各自的集中式 twin-Q 与熵温度。
+    def __init__(
+        self,
+        spec: EnvironmentSpec,
+        policy: IndependentGaussianPolicy,
+        critics: TwinIndependentCentralizedCritics,
+        td_loss: TDLossObjective,
+        entropy_objective: SACEntropyObjective,
+        return_estimator: TD0Estimator,
+        compiled_recipe: CompiledRecipe,
+    ) -> None:
+        super().__init__(spec)
+        self.policy = policy
+        self.critics = critics
+        self.target_critics = deepcopy(critics).requires_grad_(False)
+        self.td_loss = td_loss
+        self.entropy_objective = entropy_objective
+        self.return_estimator = return_estimator
+        self.compiled_recipe = compiled_recipe
 
-    Q_i(o_1:N,a_1:N) 回归 r_i，而不是团队奖励。Actor_i 只最大化自身
-    Q_i 加自身策略熵。所有网络维度相同，但每个智能体参数独立。
-    """
-
-    def __init__(self, config: MASACConfig) -> None:
-        super().__init__(config)
-        if config.initial_alpha <= 0:
-            raise ValueError("initial_alpha 必须大于 0")
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(config.observation_dim, output_dim=config.hidden_dim),
-                GaussianActionHead(config.hidden_dim, config.action_dim),
-            )
-            for _ in range(config.num_agents)
+    @classmethod
+    def from_recipe(
+        cls,
+        spec: EnvironmentSpec,
+        recipe: AlgorithmRecipe,
+        *,
+        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
+    ) -> MASAC:
+        parts = assemble_algorithm_components("masac", spec, recipe, registry)
+        if not isinstance(parts.policy, IndependentGaussianPolicy):
+            raise TypeError("MASAC policy 必须是 IndependentGaussianPolicy")
+        if not isinstance(parts.critic, TwinIndependentCentralizedCritics):
+            raise TypeError("MASAC critic 必须是 TwinIndependentCentralizedCritics")
+        if not isinstance(parts.returns, TD0Estimator):
+            raise TypeError("MASAC returns 必须是 TD0Estimator")
+        return cls(
+            spec,
+            parts.policy,
+            parts.critic,
+            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MASAC")),
+            cast(
+                SACEntropyObjective,
+                require_one(parts.objectives, SACEntropyObjective, "MASAC"),
+            ),
+            parts.returns,
+            parts.compiled,
         )
-        critic_input = config.num_agents * (config.observation_dim + config.action_dim)
-        self.critics1 = nn.ModuleList(
-            CentralizedCritic(MLPBackbone(critic_input, output_dim=config.hidden_dim))
-            for _ in range(config.num_agents)
-        )
-        self.critics2 = nn.ModuleList(
-            CentralizedCritic(MLPBackbone(critic_input, output_dim=config.hidden_dim))
-            for _ in range(config.num_agents)
-        )
-        self.target_critics1 = deepcopy(self.critics1).requires_grad_(False)
-        self.target_critics2 = deepcopy(self.critics2).requires_grad_(False)
-        # 每个智能体独立调节探索温度 alpha_i；log 参数保证 exp 后为正。
-        self.log_alpha = nn.Parameter(
-            torch.full((config.num_agents,), float(config.initial_alpha)).log()
-        )
-
-    @property
-    def cfg(self) -> MASACConfig:
-        return self.config  # type: ignore[return-value]
 
     @staticmethod
     def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:
         return torch.cat((observations.flatten(-2), actions.flatten(-2)), dim=-1)
-
-    @staticmethod
-    def _joint_policy(
-        actors: nn.ModuleList, observations: Tensor, deterministic: bool = False
-    ) -> tuple[Tensor, Tensor]:
-        outputs = [
-            actor.forward(observations[..., i, :], deterministic=deterministic)
-            for i, actor in enumerate(actors)
-        ]
-        return (
-            torch.stack([output.actions for output in outputs], dim=-2),
-            torch.stack([output.log_prob for output in outputs], dim=-1),
-        )
 
     def act(
         self,
@@ -90,80 +110,69 @@ class MASAC(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
-        return self._joint_policy(self.actors, observations, deterministic)[0]
+        return self.policy.act(
+            observations,
+            deterministic=deterministic,
+            action_mask=action_mask,
+        ).actions
 
-    def compute_loss(self, batch: MARLBatch) -> dict[str, Tensor]:
+    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MASAC 训练需要 actions/rewards/next_observations")
-        if batch.rewards.shape[-1] != self.cfg.num_agents:
-            raise ValueError("MASAC 需要每个智能体各自的奖励 [B,N]")
-        dones = batch.dones if batch.dones is not None else torch.zeros_like(batch.rewards)
-        current_input = self._critic_input(batch.observations, batch.actions)
-        q1 = torch.stack(
-            [critic.forward(current_input).squeeze(-1) for critic in self.critics1], dim=-1
+        terminated, _ = batch.terminal_flags()
+        q1, q2 = self.critics(
+            self._critic_input(batch.observations, batch.actions)
         )
-        q2 = torch.stack(
-            [critic.forward(current_input).squeeze(-1) for critic in self.critics2], dim=-1
-        )
-        alpha = self.log_alpha.exp()  # [N]，可广播到 [B,N]。
-
-        # Critic_i 的目标只包含 r_i 和自己的熵项 -alpha_i*log(pi_i)。
         with torch.no_grad():
-            next_actions, next_log_prob = self._joint_policy(self.actors, batch.next_observations)
-            next_input = self._critic_input(batch.next_observations, next_actions)
-            next_q1 = torch.stack(
-                [critic.forward(next_input).squeeze(-1) for critic in self.target_critics1],
-                dim=-1,
+            next_output = self.policy.act(batch.next_observations)
+            assert next_output.log_prob is not None
+            next_q1, next_q2 = self.target_critics(
+                self._critic_input(batch.next_observations, next_output.actions)
             )
-            next_q2 = torch.stack(
-                [critic.forward(next_input).squeeze(-1) for critic in self.target_critics2],
-                dim=-1,
+            soft_next = (
+                torch.minimum(next_q1, next_q2)
+                - self.entropy_objective.alpha * next_output.log_prob
             )
-            target_q = batch.rewards + self.cfg.gamma * (1.0 - dones.float()) * (
-                torch.minimum(next_q1, next_q2) - alpha * next_log_prob
+            target_q = self.return_estimator.estimate(
+                batch.rewards, soft_next, terminated
             )
-        critic_loss = F.mse_loss(q1, target_q) + F.mse_loss(q2, target_q)
+        first_result = self.td_loss(q1, target_q)
+        second_result = self.td_loss(q2, target_q)
+        critic_loss = first_result.loss + second_result.loss
+        critic_result = ObjectiveResult(
+            critic_loss,
+            {"critic_loss": critic_loss.detach()},
+        )
 
-        # Actor_i 的 Q_i 对联合动作求值，但只有 a_i 可以收到梯度。
-        policy_actions, log_prob = self._joint_policy(self.actors, batch.observations)
-        actor_terms = []
-        for i in range(self.cfg.num_agents):
+        policy_output = self.policy.act(batch.observations)
+        assert policy_output.log_prob is not None
+        q_terms = []
+        for index in range(self.spec.num_agents):
             joint_actions = torch.stack(
                 [
-                    policy_actions[..., j, :] if j == i else policy_actions[..., j, :].detach()
-                    for j in range(self.cfg.num_agents)
+                    policy_output.actions[..., other, :]
+                    if other == index
+                    else policy_output.actions[..., other, :].detach()
+                    for other in range(self.spec.num_agents)
                 ],
                 dim=-2,
             )
             policy_input = self._critic_input(batch.observations, joint_actions)
-            with self.frozen(self.critics1[i]), self.frozen(self.critics2[i]):
-                min_q_i = torch.minimum(
-                    self.critics1[i].forward(policy_input),
-                    self.critics2[i].forward(policy_input),
-                ).squeeze(-1)
-            actor_terms.append((alpha[i].detach() * log_prob[..., i] - min_q_i).mean())
-        actor_loss = torch.stack(actor_terms).mean()
-
-        target_entropy = (
-            self.cfg.target_entropy
-            if self.cfg.target_entropy is not None
-            else -float(self.cfg.action_dim)
+            first = self.critics.first.critics[index]
+            second = self.critics.second.critics[index]
+            with frozen_parameters(first), frozen_parameters(second):
+                q_terms.append(
+                    torch.minimum(first(policy_input), second(policy_input)).squeeze(-1)
+                )
+        min_q = torch.stack(q_terms, dim=-1)
+        actor_result = self.entropy_objective.actor(
+            policy_output.log_prob, min_q
         )
-        batch_dims = tuple(range(log_prob.ndim - 1))
-        alpha_loss = -(
-            self.log_alpha * (log_prob.detach().mean(dim=batch_dims) + target_entropy)
-        ).mean()
-        total = actor_loss + critic_loss + alpha_loss
-        return {
-            "loss": total,
-            "actor_loss": actor_loss,
-            "critic_loss": critic_loss,
-            "alpha_loss": alpha_loss,
-            "alpha": alpha.detach().mean(),
-        }
+        alpha_result = self.entropy_objective.temperature(
+            policy_output.log_prob
+        )
+        return LossBundle.combine((critic_result, actor_result, alpha_result))
 
-    def update_targets(self) -> None:
-        for target, online in zip(self.target_critics1, self.critics1, strict=True):
-            self.soft_update(target, online)
-        for target, online in zip(self.target_critics2, self.critics2, strict=True):
-            self.soft_update(target, online)
+    def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        return ((self.target_critics, self.critics),)

@@ -6,6 +6,12 @@ from typing import cast
 
 import pytest
 
+from marl.algorithms import (
+    default_maac_recipe,
+    default_maddpg_recipe,
+    default_masac_recipe,
+    default_qmix_recipe,
+)
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.recipes import (
     AlgorithmRecipe,
@@ -82,6 +88,23 @@ target_update: {type: none}
         encoding="utf-8",
     )
     assert load_algorithm_recipe(path) == recipe()
+
+
+@pytest.mark.parametrize(
+    ("name", "factory"),
+    (
+        ("maac", default_maac_recipe),
+        ("maddpg", default_maddpg_recipe),
+        ("masac", default_masac_recipe),
+        ("qmix", default_qmix_recipe),
+    ),
+)
+def test_off_policy_python_and_yaml_defaults_are_equal(
+    name: str, factory: object
+) -> None:
+    assert callable(factory)
+    path = Path(__file__).parents[1] / "examples" / "configs" / f"{name}.yaml"
+    assert load_algorithm_recipe(path) == factory()
 
 
 def test_recipe_rejects_unknown_and_missing_fields() -> None:

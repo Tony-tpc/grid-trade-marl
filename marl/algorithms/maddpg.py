@@ -8,26 +8,46 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor, nn
-from torch.nn import functional as F
 
-from marl.algorithms.base import AlgorithmConfig, BaseMARLAlgorithm
-from marl.core.batch import MARLBatch
-from marl.models.mlp import MLPBackbone
-from marl.modules.action_head import DeterministicActionHead
-from marl.modules.actor import Actor
-from marl.modules.critic import CentralizedCritic
+from marl.algorithms.assembly import assemble_algorithm_components, require_one
+from marl.algorithms.base import BaseMARLAlgorithm
+from marl.core import MARLBatch
+from marl.envs.base import EnvironmentSpec
+from marl.modules.critic import IndependentCentralizedCritics
+from marl.objectives import (
+    DeterministicPolicyObjective,
+    LossBundle,
+    TDLossObjective,
+)
+from marl.policies import IndependentDeterministicPolicy
+from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
+from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
+from marl.returns import TD0Estimator
+from marl.training.gradients import frozen_parameters
 
 
-@dataclass(frozen=True, slots=True)
-class MADDPGConfig(AlgorithmConfig):
-    num_agents: int = 2
-    observation_dim: int = 16
-    action_dim: int = 2
-    hidden_dim: int = 128
+def default_maddpg_recipe() -> AlgorithmRecipe:
+    return AlgorithmRecipe(
+        schema_version=1,
+        algorithm="maddpg",
+        policy=ComponentRecipe("independent_deterministic", {"hidden_dim": 128}),
+        critic=ComponentRecipe("independent_centralized_q", {"hidden_dim": 128}),
+        objectives=(
+            ComponentRecipe("td_mse", {}),
+            ComponentRecipe("deterministic_policy", {}),
+        ),
+        returns=ComponentRecipe("td0", {"gamma": 0.99}),
+        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
+        update=ComponentRecipe(
+            "off_policy_update",
+            {"learning_rate": 3e-4, "max_grad_norm": 10.0},
+        ),
+        target_update=ComponentRecipe("soft", {"tau": 0.005}),
+    )
 
 
 class MADDPG(BaseMARLAlgorithm):
@@ -38,52 +58,58 @@ class MADDPG(BaseMARLAlgorithm):
     不能把不同家庭/玩家的奖励平均。所有 Actor 的输入输出维度目前要求相同，
     但网络参数独立，可学习不同的博弈策略。
     """
+    def __init__(
+        self,
+        spec: EnvironmentSpec,
+        policy: IndependentDeterministicPolicy,
+        critics: IndependentCentralizedCritics,
+        td_loss: TDLossObjective,
+        policy_objective: DeterministicPolicyObjective,
+        return_estimator: TD0Estimator,
+        compiled_recipe: CompiledRecipe,
+    ) -> None:
+        super().__init__(spec)
+        self.policy = policy
+        self.critics = critics
+        self.target_policy = deepcopy(policy).requires_grad_(False)
+        self.target_critics = deepcopy(critics).requires_grad_(False)
+        self.td_loss = td_loss
+        self.policy_objective = policy_objective
+        self.return_estimator = return_estimator
+        self.compiled_recipe = compiled_recipe
 
-    def __init__(self, config: MADDPGConfig) -> None:
-        super().__init__(config)
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(config.observation_dim, output_dim=config.hidden_dim),
-                DeterministicActionHead(config.hidden_dim, config.action_dim),
-            )
-            for _ in range(config.num_agents)
+    @classmethod
+    def from_recipe(
+        cls,
+        spec: EnvironmentSpec,
+        recipe: AlgorithmRecipe,
+        *,
+        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
+    ) -> MADDPG:
+        parts = assemble_algorithm_components("maddpg", spec, recipe, registry)
+        if not isinstance(parts.policy, IndependentDeterministicPolicy):
+            raise TypeError("MADDPG policy 必须是 IndependentDeterministicPolicy")
+        if not isinstance(parts.critic, IndependentCentralizedCritics):
+            raise TypeError("MADDPG critic 必须是 IndependentCentralizedCritics")
+        if not isinstance(parts.returns, TD0Estimator):
+            raise TypeError("MADDPG returns 必须是 TD0Estimator")
+        return cls(
+            spec,
+            parts.policy,
+            parts.critic,
+            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MADDPG")),
+            cast(
+                DeterministicPolicyObjective,
+                require_one(parts.objectives, DeterministicPolicyObjective, "MADDPG"),
+            ),
+            parts.returns,
+            parts.compiled,
         )
-        critic_input = config.num_agents * (
-            config.observation_dim + config.action_dim
-        )  # [observation,action]
-        self.critics = nn.ModuleList(
-            CentralizedCritic(MLPBackbone(critic_input, output_dim=config.hidden_dim))
-            for _ in range(config.num_agents)
-        )
-        self.target_actors = deepcopy(self.actors).requires_grad_(False)
-        self.target_critics = deepcopy(self.critics).requires_grad_(False)
-
-    @property
-    def cfg(self) -> MADDPGConfig:
-        return self.config  # type: ignore[return-value]
 
     @staticmethod
     def _critic_input(observations: Tensor, actions: Tensor) -> Tensor:
         """把联合观测和动作展平后拼成 ``[B, N * (O + A)]``。"""
-        return torch.cat(
-            (
-                observations.flatten(-2),
-                actions.flatten(-2),
-            ),
-            dim=-1,
-        )
-
-    @staticmethod
-    def _joint_actions(actors: nn.ModuleList, observations: Tensor) -> Tensor:
-        return torch.stack(
-            [
-                # 第 i 个 Actor 只读取第 i 个 Agent 的局部观测。
-                actor.forward(observations[..., i, :], deterministic=True).actions
-                for i, actor in enumerate(actors)
-            ],
-            dim=-2,
-            # 将所有智能体的动作堆叠成 [batch, num_agents, action_dim]
-        )
+        return torch.cat((observations.flatten(-2), actions.flatten(-2)), dim=-1)
 
     def act(
         self,
@@ -94,64 +120,55 @@ class MADDPG(BaseMARLAlgorithm):
         **kwargs: Tensor,
     ) -> Tensor:
         """独立 Actor 并行执行；DDPG 探索噪声由采样器加在返回动作上。"""
-        return self._joint_actions(self.actors, observations)
+        return self.policy.act(observations, deterministic=True, action_mask=action_mask).actions
 
-    def compute_loss(self, batch: MARLBatch) -> dict[str, Tensor]:
+    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MADDPG 训练需要 actions/rewards/next_observations")
-        if batch.rewards.shape[-1] != self.cfg.num_agents:
-            raise ValueError("MADDPG 需要每个智能体各自的奖励 [B,N]")
-        dones = batch.dones if batch.dones is not None else torch.zeros_like(batch.rewards)
-
-
+        terminated, _ = batch.terminal_flags()
         # ------------------- Critic Loss ------------------------
         # 每个 Q_i 都看完整联合经验，但回归各自的 r_i + gamma Q_i'。
         current_input = self._critic_input(batch.observations, batch.actions)
-        current_q = torch.stack(
-            [critic.forward(current_input).squeeze(-1) for critic in self.critics], dim=-1
-        )
+        current_q = self.critics(current_input)
         with torch.no_grad():
-            next_actions = self._joint_actions(self.target_actors, batch.next_observations)
-            next_input = self._critic_input(batch.next_observations, next_actions)
-            # 计算每个actor的Q_value 
-            next_q = torch.stack(
-                [critic.forward(next_input).squeeze(-1) for critic in self.target_critics],
-                dim=-1,
+            next_actions = self.target_policy.act(batch.next_observations).actions
+            next_q = self.target_critics(
+                self._critic_input(batch.next_observations, next_actions)
             )
-            target_q = batch.rewards + self.cfg.gamma * (1.0 - dones.float()) * next_q
-        # TD-ERROR
-        critic_loss = F.mse_loss(current_q, target_q)
+            target_q = self.return_estimator.estimate(
+                batch.rewards, next_q, terminated
+            )
+        critic_result = self.td_loss(current_q, target_q)
 
         # ------------------- Actor Loss ------------------------
         # 更新 Actor_i 时，只让自己的动作 a_i 保持梯度。其他 Actor 的动作固定，
         # 因为当前优化的是 J_i，而不是把别人的收益也算进同一个目标。
-        policy_actions = self._joint_actions(self.actors, batch.observations)
+        policy_actions = self.policy.act(batch.observations).actions
         # 存储每一个 Agent 的 actor loss
-        actor_terms = []
-        for i, critic in enumerate(self.critics):
+        q_terms = []
+        for index, critic in enumerate(self.critics.critics):
             # joint_actions = [detach(a_(j不等于i),...,a_(i=j),...]
             joint_actions = torch.stack(
                 [
                     # 当前 Agent 的动作保留梯度，其他 Agent 的动作视作常量。
-                    policy_actions[..., j, :] if j == i else policy_actions[..., j, :].detach()
-                    for j in range(self.cfg.num_agents)
+                    policy_actions[..., other, :]
+                    if other == index
+                    else policy_actions[..., other, :].detach()
+                    for other in range(self.spec.num_agents)
                 ],
                 dim=-2,
             )
-            with self.frozen(critic):
-                q_i = critic.forward(self._critic_input(batch.observations, joint_actions))
-            actor_terms.append(-q_i.mean())
-        actor_loss = torch.stack(actor_terms).mean()
+            with frozen_parameters(critic):
+                q_terms.append(
+                    critic(self._critic_input(batch.observations, joint_actions)).squeeze(-1)
+                )
+        # 所有 Agent 的 -Q_i 在 batch 和 agent 两个维度上做平均后的结果
+        actor_result = self.policy_objective(torch.stack(q_terms, dim=-1))
+        return LossBundle.combine((critic_result, actor_result))
 
-
-        return {
-            "loss": actor_loss + critic_loss,
-            "actor_loss": actor_loss,
-            "critic_loss": critic_loss,
-        }
-
-    def update_targets(self) -> None:
-        for target, online in zip(self.target_actors, self.actors, strict=True):
-            self.soft_update(target, online)
-        for target, online in zip(self.target_critics, self.critics, strict=True):
-            self.soft_update(target, online)
+    def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        return (
+            (self.target_policy, self.policy),
+            (self.target_critics, self.critics),
+        )

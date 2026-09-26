@@ -1,144 +1,104 @@
-"""论文启发的离散动作 MAAC，保留每个智能体的独立目标。"""
+"""组合式离散动作 MAAC，保留逐智能体收益。"""
 
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import cast
 
 import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical
-from torch.nn import functional as F
 
-from marl.algorithms.base import AlgorithmConfig, BaseMARLAlgorithm
-from marl.core.batch import MARLBatch
-from marl.models.mlp import MLPBackbone
-from marl.modules.action_head import DiscreteActionHead
-from marl.modules.actor import Actor
+from marl.algorithms.assembly import assemble_algorithm_components, require_one
+from marl.algorithms.base import BaseMARLAlgorithm
+from marl.core import MARLBatch
+from marl.envs.base import EnvironmentSpec
+from marl.modules.critic import AttentionCritic
+from marl.objectives import (
+    CounterfactualPolicyObjective,
+    EntropyObjective,
+    LossBundle,
+    TDLossObjective,
+)
+from marl.policies import IndependentDiscretePolicy
+from marl.recipes import AlgorithmRecipe, CompiledRecipe, ComponentRecipe
+from marl.registry import DEFAULT_COMPONENT_REGISTRY, ComponentRegistry
+from marl.returns import TD0Estimator
 
 
-@dataclass(frozen=True, slots=True)
-class MAACConfig(AlgorithmConfig):
-    num_agents: int = 2
-    observation_dim: int = 16
-    action_dim: int = 5
-    hidden_dim: int = 128
-    attention_heads: int = 4
-    entropy_coef: float = 0.01
-
-
-class AttentionCritic(nn.Module):
-    """共享注意力层 + 每个智能体各自的 Q_i 输出。
-
-    对智能体 i，注意力只聚合其他智能体的 (o_j,a_j)，不读取 a_i。然后把
-    自己的观测编码和这个上下文拼起来，输出所有候选动作的 Q_i(a_i)。
-    因此固定 a_-i 时，可以直接比较不同 a_i 的反事实价值。
-    形状：observations [B,N,O]，actions [B,N]，输出 [B,N,A]。
-    """
-
-    def __init__(self, config: MAACConfig) -> None:
-        super().__init__()
-        if config.hidden_dim % config.attention_heads:
-            raise ValueError("hidden_dim 必须能被 attention_heads 整除")
-        self.action_dim = config.action_dim
-        self.own_projection = nn.Linear(config.observation_dim, config.hidden_dim)
-        self.other_projection = nn.Linear(
-            config.observation_dim + config.action_dim, config.hidden_dim
-        )
-        self.attention = nn.MultiheadAttention(
-            config.hidden_dim, config.attention_heads, batch_first=True
-        )
-        self.register_buffer(
-            "_self_attention_mask",
-            torch.eye(config.num_agents, dtype=torch.bool),
-            persistent=False,
-        )
-        self.q_head = nn.Sequential(
-            nn.Linear(2 * config.hidden_dim, config.hidden_dim),
-            nn.ReLU(),
-            nn.Linear(config.hidden_dim, config.action_dim),
-        )
-
-    def forward(self, observations: Tensor, actions: Tensor) -> Tensor:
-        leading, agents = observations.shape[:-2], observations.shape[-2]
-        own = self.own_projection(observations).reshape(
-            -1, agents, self.own_projection.out_features
-        )
-        one_hot = F.one_hot(actions.long(), self.action_dim).to(observations.dtype)
-        others = self.other_projection(torch.cat((observations, one_hot), dim=-1))
-        others = others.reshape(-1, agents, others.shape[-1])
-        if agents == 1:
-            context = torch.zeros_like(own)
-        else:
-            # 对角线 True 表示 i 不能把自己的 replay 动作 a_i 当作“别人信息”读取。
-            context, _ = self.attention(
-                own,
-                others,
-                others,
-                attn_mask=self._self_attention_mask,
-                need_weights=False,
-            )
-        q_values = self.q_head(torch.cat((own, context), dim=-1))
-        return cast(Tensor, q_values.reshape(*leading, agents, self.action_dim))
+def default_maac_recipe() -> AlgorithmRecipe:
+    return AlgorithmRecipe(
+        schema_version=1,
+        algorithm="maac",
+        policy=ComponentRecipe("independent_discrete", {"hidden_dim": 128}),
+        critic=ComponentRecipe(
+            "attention_q", {"hidden_dim": 128, "attention_heads": 4}
+        ),
+        objectives=(
+            ComponentRecipe("td_mse", {}),
+            ComponentRecipe("counterfactual", {}),
+            ComponentRecipe("entropy", {"coefficient": 0.01}),
+        ),
+        returns=ComponentRecipe("td0", {"gamma": 0.99}),
+        experience=ComponentRecipe("replay", {"capacity": 100_000, "batch_size": 256}),
+        update=ComponentRecipe(
+            "off_policy_update",
+            {"learning_rate": 3e-4, "max_grad_norm": 10.0},
+        ),
+        target_update=ComponentRecipe("soft", {"tau": 0.005}),
+    )
 
 
 class MAAC(BaseMARLAlgorithm):
-    """每个智能体独立 Actor，Critic 通过共享注意力参数联合训练。
-
-    Bellman 标签 y_i 使用环境返回的 r_i，Actor_i 优化自己的优势函数。
-    当前 Actor 是离散分类分布；论文原始连续+二元混合动作还需专用动作头。
-    """
-
-    def __init__(self, config: MAACConfig) -> None:
-        super().__init__(config)
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(config.observation_dim, output_dim=config.hidden_dim),
-                DiscreteActionHead(config.hidden_dim, config.action_dim),
-            )
-            for _ in range(config.num_agents)
-        )
-        self.critic = AttentionCritic(config)
-        self.target_actors = deepcopy(self.actors).requires_grad_(False)
-        self.target_critic = deepcopy(self.critic).requires_grad_(False)
-
-    @property
-    def cfg(self) -> MAACConfig:
-        return self.config  # type: ignore[return-value]
-
-    @staticmethod
-    def _joint_logits(
-        actors: nn.ModuleList,
-        observations: Tensor,
-        action_mask: Tensor | None = None,
-    ) -> Tensor:
-        return torch.stack(
-            [
-                cast(Actor, actor).discrete_logits(
-                    observations[..., i, :],
-                    action_mask=(action_mask[..., i, :] if action_mask is not None else None),
-                )
-                for i, actor in enumerate(actors)
-            ],
-            dim=-2,
-        )
+    def __init__(
+        self,
+        spec: EnvironmentSpec,
+        policy: IndependentDiscretePolicy,
+        critic: AttentionCritic,
+        td_loss: TDLossObjective,
+        policy_objective: CounterfactualPolicyObjective,
+        entropy_objective: EntropyObjective,
+        return_estimator: TD0Estimator,
+        compiled_recipe: CompiledRecipe,
+    ) -> None:
+        super().__init__(spec)
+        self.policy = policy
+        self.critic = critic
+        self.target_policy = deepcopy(policy).requires_grad_(False)
+        self.target_critic = deepcopy(critic).requires_grad_(False)
+        self.td_loss = td_loss
+        self.policy_objective = policy_objective
+        self.entropy_objective = entropy_objective
+        self.return_estimator = return_estimator
+        self.compiled_recipe = compiled_recipe
 
     @classmethod
-    def _joint_policy(
+    def from_recipe(
         cls,
-        actors: nn.ModuleList,
-        observations: Tensor,
-        action_mask: Tensor | None = None,
-        deterministic: bool = False,
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        logits = cls._joint_logits(actors, observations, action_mask)
-        distribution = Categorical(logits=logits, validate_args=False)
-        actions = logits.argmax(dim=-1) if deterministic else distribution.sample()
-        return (
-            actions,
-            distribution.log_prob(actions),
-            logits,
+        spec: EnvironmentSpec,
+        recipe: AlgorithmRecipe,
+        *,
+        registry: ComponentRegistry = DEFAULT_COMPONENT_REGISTRY,
+    ) -> MAAC:
+        parts = assemble_algorithm_components("maac", spec, recipe, registry)
+        if not isinstance(parts.policy, IndependentDiscretePolicy):
+            raise TypeError("MAAC policy 必须是 IndependentDiscretePolicy")
+        if not isinstance(parts.critic, AttentionCritic):
+            raise TypeError("MAAC critic 必须是 AttentionCritic")
+        if not isinstance(parts.returns, TD0Estimator):
+            raise TypeError("MAAC returns 必须是 TD0Estimator")
+        return cls(
+            spec,
+            parts.policy,
+            parts.critic,
+            cast(TDLossObjective, require_one(parts.objectives, TDLossObjective, "MAAC")),
+            cast(
+                CounterfactualPolicyObjective,
+                require_one(parts.objectives, CounterfactualPolicyObjective, "MAAC"),
+            ),
+            cast(EntropyObjective, require_one(parts.objectives, EntropyObjective, "MAAC")),
+            parts.returns,
+            parts.compiled,
         )
 
     def act(
@@ -149,46 +109,51 @@ class MAAC(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
-        return self._joint_policy(self.actors, observations, action_mask, deterministic)[0]
+        return self.policy.act(
+            observations,
+            deterministic=deterministic,
+            action_mask=action_mask,
+        ).actions
 
-    def compute_loss(self, batch: MARLBatch) -> dict[str, Tensor]:
+    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MAAC 训练需要 actions/rewards/next_observations")
-        if batch.rewards.shape[-1] != self.cfg.num_agents:
-            raise ValueError("MAAC 需要每个智能体各自的奖励 [B,N]")
-        dones = batch.dones if batch.dones is not None else torch.zeros_like(batch.rewards)
+        terminated, _ = batch.terminal_flags()
         q_all = self.critic(batch.observations, batch.actions)
-        chosen_q = q_all.gather(-1, batch.actions.long().unsqueeze(-1)).squeeze(-1)
-
+        chosen_q = q_all.gather(
+            -1, batch.actions.long().unsqueeze(-1)
+        ).squeeze(-1)
         with torch.no_grad():
-            next_actions, next_log_prob, _ = self._joint_policy(
-                self.target_actors, batch.next_observations, batch.next_action_mask
+            next_output = self.target_policy.act(
+                batch.next_observations,
+                action_mask=batch.next_action_mask,
             )
-            next_q_all = self.target_critic(batch.next_observations, next_actions)
-            next_q = next_q_all.gather(-1, next_actions.unsqueeze(-1)).squeeze(-1)
-            target_q = batch.rewards + self.cfg.gamma * (1.0 - dones.float()) * (
-                next_q - self.cfg.entropy_coef * next_log_prob
+            assert next_output.log_prob is not None
+            next_q_all = self.target_critic(
+                batch.next_observations, next_output.actions
             )
-        critic_loss = F.mse_loss(chosen_q, target_q)
+            next_q = next_q_all.gather(
+                -1, next_output.actions.unsqueeze(-1)
+            ).squeeze(-1)
+            soft_next_q = (
+                next_q
+                - self.entropy_objective.coefficient * next_output.log_prob
+            )
+            target_q = self.return_estimator.estimate(
+                batch.rewards, soft_next_q, terminated
+            )
+        critic_result = self.td_loss(chosen_q, target_q)
 
-        # 反事实 baseline：固定其他智能体动作，按 pi_i 对候选 a_i 求期望。
-        logits = self._joint_logits(self.actors, batch.observations, batch.action_mask)
-        distribution = Categorical(logits=logits, validate_args=False)
-        policy_q = q_all.detach()
-        probabilities = distribution.probs.detach()
-        baseline = (probabilities * policy_q).sum(dim=-1, keepdim=True)
-        advantage = (policy_q - baseline).detach()
-        actor_loss = -(probabilities * advantage * distribution.logits).sum(dim=-1).mean()
-        entropy = distribution.entropy().mean()
-        total = actor_loss + critic_loss - self.cfg.entropy_coef * entropy
-        return {
-            "loss": total,
-            "actor_loss": actor_loss,
-            "critic_loss": critic_loss,
-            "entropy": entropy,
-        }
+        logits = self.policy.logits(batch.observations, batch.action_mask)
+        actor_result = self.policy_objective(logits, q_all)
+        entropy = Categorical(logits=logits, validate_args=False).entropy()
+        return LossBundle.combine(
+            (critic_result, actor_result, self.entropy_objective(entropy))
+        )
 
-    def update_targets(self) -> None:
-        for target, online in zip(self.target_actors, self.actors, strict=True):
-            self.soft_update(target, online)
-        self.soft_update(self.target_critic, self.critic)
+    def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        return (
+            (self.target_policy, self.policy),
+            (self.target_critic, self.critic),
+        )

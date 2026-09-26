@@ -9,6 +9,24 @@ from torch import Tensor
 
 
 @dataclass(frozen=True, slots=True)
+class TD0Estimator:
+    """逐智能体一步 Bellman target，只由 true termination 阻止 bootstrap。"""
+
+    gamma: float = 0.99
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.gamma <= 1.0:
+            raise ValueError("gamma 必须位于 [0, 1]")
+
+    def estimate(
+        self, rewards: Tensor, next_values: Tensor, terminated: Tensor
+    ) -> Tensor:
+        if rewards.shape != next_values.shape or rewards.shape != terminated.shape:
+            raise ValueError("rewards/next_values/terminated 必须具有相同逐智能体形状")
+        return rewards + self.gamma * (~terminated.bool()).to(rewards.dtype) * next_values
+
+
+@dataclass(frozen=True, slots=True)
 class GAEEstimator:
     """逐智能体 Generalized Advantage Estimation。
 
