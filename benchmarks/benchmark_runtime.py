@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import cProfile
 import json
+import pstats
+import subprocess
 import time
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
+from benchmarks.benchmark_noncooperative import BenchmarkSettings, _train_mappo, _train_off_policy
 from marl.algorithms import MAAC, MAPPO, MAACConfig, MAPPOConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, MPE2SimpleAdversaryConfig, Transition, build_mpe2_simple_adversary
@@ -255,6 +259,78 @@ def _mappo_benchmark(
     }
 
 
+def benchmark_full_training(
+    device: torch.device, threads: int, steps: int, repeats: int, output: Path,
+    reference: Path | None = None,
+) -> dict[str, Any]:
+    """真实环境+采集+replay+更新+诊断+评估；不可用 collector-only 代替。"""
+    if repeats < 5:
+        raise ValueError("端到端验收至少重复 5 次")
+    torch.set_num_threads(threads)
+    settings = BenchmarkSettings(target_environment_steps=steps, eval_interval_steps=steps,
+                                 eval_episodes=1, layer_norm=True, normalize_targets=True,
+                                 detailed_evaluation=False)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    previous = json.loads(reference.read_text(encoding="utf-8")) if reference else None
+    results = {}
+    for name in ("maac", "mappo", "maddpg", "masac"):
+        times, peaks = [], []
+        counts = []
+        state_path = output.with_name(f"{output.stem}_{name}_weights.pt")
+        # 完整预热一次，不把首次初始化算作 CUDA/CPU 稳态速度。
+        for repetition in range(-1, repeats):
+            captured: list[Any] = []
+
+            def run(
+                name: str = name, repetition: int = repetition, captured: list[Any] = captured,
+            ) -> None:
+                arguments = (7 + max(repetition, 0), settings, device, None)
+                captured.append(_train_mappo(*arguments) if name == "mappo"
+                                else _train_off_policy(name, *arguments))
+
+            elapsed, peak = _measure(device, run)
+            result, algorithm = captured.pop()
+            if repetition >= 0:
+                times.append(elapsed)
+                peaks.append(peak)
+                counts.append(result["optimizer_steps"])
+            if repetition == repeats - 1:
+                torch.save({key: value.detach().cpu() for key, value
+                            in algorithm.state_dict().items()}, state_path)
+            del algorithm
+        row: dict[str, Any] = {
+            "seconds": times, "median_seconds": float(np.median(times)),
+            "min_seconds": min(times), "max_seconds": max(times),
+            "environment_steps_per_run": steps, "optimizer_steps": counts,
+            "environment_steps_per_second": steps / float(np.median(times)),
+            "optimizer_steps_per_second": float(np.median(counts)) / float(np.median(times)),
+            "peak_bytes": max((p for p in peaks if p is not None), default=None),
+            "final_weights": str(state_path.resolve()),
+        }
+        if previous is not None:
+            before = previous["results"][name]
+            if before["optimizer_steps"] != counts or any(
+                asdict(settings).get(key) != value for key, value in previous["settings"].items()
+            ):
+                raise ValueError("性能对照的配置或 optimizer-step 数不同")
+            row["speedup"] = before["median_seconds"] / row["median_seconds"]
+            row["peak_memory_ratio"] = (row["peak_bytes"] / before["peak_bytes"]
+                                        if before["peak_bytes"] else None)
+            old = torch.load(before["final_weights"], weights_only=True)
+            new = torch.load(state_path, weights_only=True)
+            row["numerically_equivalent"] = old.keys() == new.keys() and all(
+                torch.allclose(old[key], new[key], atol=1e-5, rtol=1e-4) for key in old
+            )
+        results[name] = row
+        print(f"{name}: {row['environment_steps_per_second']:.2f} env steps/s", flush=True)
+    report = {"device": str(device), "torch_threads": threads,
+              "source_commit": subprocess.check_output(
+                  ["git", "rev-parse", "HEAD"], text=True).strip(),
+              "settings": asdict(settings), "repeats": repeats, "results": results}
+    output.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="MARL 批量运行路径性能回归")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -263,6 +339,12 @@ def main() -> None:
     parser.add_argument("--horizon", type=int, default=25)
     parser.add_argument("--mappo-repeats", type=int, default=5)
     parser.add_argument("--enforce", action="store_true")
+    parser.add_argument("--full-training", action="store_true")
+    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--steps", type=int, default=200)
+    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument("--reference", type=Path)
+    parser.add_argument("--profile-algorithm", choices=("maac", "mappo", "maddpg", "masac"))
     parser.add_argument(
         "--output",
         type=Path,
@@ -270,6 +352,48 @@ def main() -> None:
     )
     args = parser.parse_args()
     device = resolve_device(args.device)
+    if args.profile_algorithm:
+        torch.set_num_threads(args.threads)
+        settings = BenchmarkSettings(
+            target_environment_steps=args.steps, eval_interval_steps=args.steps,
+            layer_norm=True, normalize_targets=True, detailed_evaluation=False, eval_episodes=1,
+        )
+        profiler = cProfile.Profile()
+        profiler.enable()
+        if args.profile_algorithm == "mappo":
+            _train_mappo(7, settings, device, None)
+        else:
+            _train_off_policy(args.profile_algorithm, 7, settings, device, None)
+        profiler.disable()
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        profiler.dump_stats(str(args.output.with_suffix(".pstats")))
+        statistics = pstats.Stats(profiler)
+        # 累计 CPU 墙钟时间相互包含；CUDA 为主机调度时间，不冒充 kernel 用时。
+        stages = {"environment": ("reset", "step"),
+                  "policy_forward": ("act", "sample", "evaluate", "logits_for_agent"),
+                  "replay": ("record_many",),
+                  "critic_forward": ("compute_critic_loss_bundle", "compute_value_loss_bundle"),
+                  "actor_forward": ("compute_actor_loss_bundle", "compute_policy_loss_bundle"),
+                  "temperature_forward": ("compute_temperature_loss_bundle",),
+                  "backward_clip_optimizer": ("optimize",),
+                  "evaluation": ("_evaluation_checkpoint", "_evaluate"),
+                  "checkpoint": ("save_run", "_checkpoint_metadata")}
+        raw = [
+            {"file": key[0], "line": key[1], "function": key[2],
+             "calls": value[1], "self_seconds": value[2], "cumulative_seconds": value[3]}
+            for key, value in statistics.stats.items()  # type: ignore[attr-defined]
+            if any(key[2] in names for names in stages.values())
+        ]
+        args.output.write_text(json.dumps({
+            "algorithm": args.profile_algorithm, "device": str(device),
+            "stage_names": stages, "functions": raw,
+            "note": "CPU 调度墙钟时间；嵌套函数不能相加，CUDA kernel 需另用 torch.profiler",
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+        return
+    if args.full_training:
+        benchmark_full_training(device, args.threads, args.steps, args.repeats,
+                                args.output, args.reference)
+        return
     report: dict[str, Any] = {
         "device": str(device),
         "off_policy": _off_policy_benchmark(

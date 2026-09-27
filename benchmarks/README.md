@@ -152,8 +152,9 @@ JSON 同目录还会生成 CSV 摘要和 `<report>_artifacts/checkpoints/` 下�
   `numerically_stable` 字段仅作有限值兼容，不代表价值不漂移或策略收敛。
 - 逐智能体记录 V/Q、target、TD error 的均值/峰值/非有限事件，以及 RMSE、
   bias、explained variance。高裁剪率或低离散熵持续三个诊断区间触发警报。
-  价值绝对值 10,000 为本基准经验警报，阈值保存在 settings，不是理论边界。
-  非有限诊断在最近日志边界中止该运行；不是逐 GPU kernel 同步检查。
+  原始价值绝对值 10,000 为本基准经验安全阈值，保存在 settings，不是理论边界。
+  超过该阈值或非有限诊断在最近日志边界中止该运行；不是逐 GPU kernel 同步检查。
+  持续低熵/高裁剪率保留为警报，不自动修改算法或静默重启。
 - 固定随机对手和固定未训练对手分别替换一侧；共同场景种子与训练分离，
   同时输出确定性/随机评估。评估使用独立 RNG 上下文，不消耗训练 RNG。
 - 新版完整报告额外生成逐智能体尺度、真实裁剪率和固定对手学习曲线，
@@ -185,7 +186,114 @@ MAPPO 两 seed 的持续高裁剪警报在组合组中未出现。2k 太短，�
 可用 `--algorithms`、`--seeds`、`--train-episodes`、`--eval-episodes`、
 `--horizon` 和 `--hidden-dim` 调整规模。
 
-## 运行路径性能验收
+## 并行训练、恢复与更新调度
+
+完整验证预算为四算法各 10,000 环境步 × seeds 7、17、29，QMIX 仍记录为预期
+不兼容。不自动扩大到 100k×5。示例（默认 UTD=1，不通过减少更新冒充提速）：
+
+```powershell
+.\.venv\Scripts\python.exe -m benchmarks.benchmark_noncooperative `
+  --algorithms maac mappo maddpg masac qmix --seeds 7 17 29 `
+  --environment-steps 10000 --layer-norm --normalize-targets `
+  --device cpu --torch-threads 1 --workers 4 `
+  --output benchmark-results/revised_10k_x3.json
+.\.venv\Scripts\python.exe -m benchmarks.validate_report benchmark-results/revised_10k_x3.json
+.\.venv\Scripts\python.exe -m benchmarks.plot_noncooperative `
+  benchmark-results/revised_10k_x3.json --output-dir benchmark-results/plots_revised_10k_x3
+```
+
+- `--workers` 默认 1，标准库 ProcessPoolExecutor + Windows spawn 按算法×seed
+  分任务；多进程每个 Torch 线程固定 1。单张 CUDA 卡只允许 1 worker。
+- worker 各自拥有 diagnostics JSONL、progress JSON、checkpoint 和失败 JSON。
+  进度包含环境步、更新计数、墙钟 ETA、线程数和源码哈希；ETA 是当前任务的
+  平均速度估计，不是剩余整个任务池的确定结束时间。
+- cross-play 按需加载 checkpoint，不把所有完成模型长期留在显卡上。
+- `--resume` 必须使用同一输出/产物目录及配置。完成任务验证源码哈希、配置、
+  完整标记和 checkpoint SHA256 后才跳过；未完成任务从 resume checkpoint 恢复。
+- resume checkpoint 在完整 rollout 的评估边界保存，跨过默认 1000 环境步间隔时
+  保存，终点强制保存；不整除时顺延到下一评估边界。保存 trainer/replay/optimizer、
+  Torch 与探索 RNG、episode、评估历史、训练诊断、累计时间和调度余数。
+  不恢复 episode 中途环境内部状态。旧诊断日志归档为 before-resume 文件，
+  当前日志从 checkpoint 中真实保存的历史重建，避免重复历史混入曲线。
+- 旧最终 checkpoint 缺少运行层状态，不能冒充精确续训；只能显式诊断/评估。
+
+`--learning-starts` 默认 replay batch_size；`--train-every-transitions` 和
+`--gradient-steps` 默认均为 1。计数单位是联合 transition，不乘智能体数量。
+三组调度消融分别使用：原 warm-up/batch32/UTD1、warm-up1024/batch32/UTD1、
+warm-up1024/batch128/UTD0.25。最后一项改变了训练工作量，不能计作等价实现收益。
+
+本机 500 步 × 四算法 × 两 seed 的 worker 校准，1/2/4 workers 整批墙钟分别为
+44.55/47.88/39.15 秒（4 workers 约 1.14×），包含进程启动与汇总，不能推断为
+线性四倍提速。10k×3 选择 4 workers、CPU 每进程 1 线程。
+三组 2k×2 离策略调度消融每任务分别执行 1969/977/244 次算法更新，整批耗时
+134.30/76.30/40.16 秒；均未触发短程健康警报，但工作量不同，不属于等价性能对照。
+主验证保留原 warm-up、batch32 和 UTD1，没有自动采用少更新的配置。
+
+### 2026-09-27 的 10k×3 验收
+
+MAAC、MAPPO、MADDPG、MASAC × seeds 7/17/29 共 12 个任务完成；QMIX 预期不兼容。
+总墙钟 1088.30 秒（含密集评估、保存和 cross-play），不是旧 100k×5 同预算速度对照。
+每任务 100 个训练诊断点、101 个真实评估点、201 条 JSONL 事件和一个最终 checkpoint；
+四算法原始 value/target 峰值分别约 60.78、40.24、100.61、63.36，数值全部有限，
+当前阈值下没有健康警报。MAAC 等价值曲线仍在上升，**不能据此宣称长期稳定或收敛**。
+离散/连续各有 6×6 双方收益 cross-play 矩阵，共生成 29 张图和中文阅读说明。
+
+固定随机对手、确定性评估中，相比 step 0 的 adversary 平均回报增量分别为
+21.08、23.26、10.88、9.34；good-team 分别为 17.43、17.79、2.81、3.61。
+仅三个训练 seed，good-team 的配对增量 Student-t 95% 区间均跨零，连续算法还存在
+单 seed 退步；不能只凭正的均值宣布普遍改善，也不跨动作空间排名。
+
+本次每个评估点包含 10 种组合、各 4 局、每局 25 步，故每任务另有约 101,000 个
+评估环境步（不计入 10,000 训练步预算，也不含最终 cross-play）。密集审计会增加时间。
+产物保存在忽略目录 `benchmark-results/revised_10k_x3*` 和 `plots_revised_10k_x3/`。
+
+## 端到端性能验收
+
+新增完整训练测量复用非合作基准，包含真实采集、replay、算法更新和诊断评估，
+完整预热后至少重复 5 次，记录中位数、范围、实际 optimizer steps、显存和最终权重：
+
+```powershell
+.\.venv\Scripts\python.exe -m benchmarks.benchmark_runtime --full-training `
+  --device cpu --threads 1 --steps 200 --repeats 5 `
+  --output benchmark-results/performance/current_cpu.json
+.\.venv\Scripts\python.exe -m benchmarks.benchmark_runtime --profile-algorithm masac `
+  --device cpu --threads 1 --steps 200 --output benchmark-results/performance/masac_profile.json
+```
+
+`--reference` 可对照同配置、同更新数的基线报告，最终权重容差为
+`atol=1e-5, rtol=1e-4`。CPU 1/2/4 线程和 CUDA 分开校准；不改变通用
+`--device auto` 的含义。profile 同时保存标准 pstats 和函数级阶段摘要；
+累计耗时有嵌套，不能相加；CUDA 下 cProfile 是主机调度时间，不是 kernel 用时。
+GPU 遥测为可用时的结束快照，缺失标 unavailable，不用于事后猜测全部慢因。
+
+保留的实现优化：MAAC 内置独立 actor 利用 grad=None 隔离动量，外部策略保留安全
+回退；MASAC 温度只在 actor 更新后采样 log-prob，不再运行 critic；CUDA replay
+使用私有 pinned staging 与复制完成事件，公开 sample 仍独立拥有结果；MAPPO
+直接保留 CPU 环境张量和动作，避免无用的 CPU→GPU→CPU；设备指标批量累计。
+没有引入新 UpdatePlan、第二套 trainer 更新循环或自定义 attention kernel。
+foreach Adam 实验没有确认收益，已撤回；compile/BF16 未启用。
+
+2026-09-27 最终配对测量以稳定性提交 `052faf0` 为旧实现，每侧独立常驻进程、完整
+预热、200 个训练环境步，五次重复交替 old/new 顺序，使用相同种子和更新次数。
+末次 seed 11 的四算法模型/统计在 CPU 和 CUDA 上均通过上述参数容差检查。
+下面是旧/新耗时中位数之比（大于 1 表示更快）：
+
+| 算法 | CPU 单线程 | CUDA | CUDA 峰值显存比（新/旧） |
+|---|---:|---:|---:|
+| MAAC | 0.989× | 1.112× | 0.9992× |
+| MAPPO | 1.009× | 1.031× | 0.9985× |
+| MADDPG | 0.952× | 1.043× | 0.9991× |
+| MASAC | 1.078× | 1.004× | 0.9984× |
+
+离策略三算法几何平均为 CPU **1.005×**、CUDA **1.052×**，**未达到 20% 提速目标**。
+MAPPO 回退/显存门槛通过。原始结果保留五次耗时范围：例如 MASAC CUDA 的旧/新
+耗时范围分别为 6.57～12.76 / 5.90～11.03 秒，波动明显，不把几个百分点包装成稳健收益。
+等价实现收益、worker 总吞吐收益、减少更新的配置收益必须分开阅读。
+短程 CPU cProfile 中 MAAC/MASAC 的公共 backward/裁剪/optimizer 路径累计约
+2.73/3.85 秒，replay 采样约 0.044/0.042 秒；主要剩余成本仍是大量小批次网络更新。
+这些带 profiler 开销的函数累计时间有嵌套，不能相加或当作生产吞吐。
+
+## 历史 collector-only 结果（不代表完整训练提速）
 
 `benchmark_runtime.py` 在同一进程中比较正确性修复后的逐环境基线与批量 collector，
 以及 MAPPO 逐 minibatch 搬运与整批 rollout 搬运：

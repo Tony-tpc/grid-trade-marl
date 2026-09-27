@@ -106,6 +106,23 @@ class OptimizerRuntime:
 
     @staticmethod
     def _accumulate(destination: dict[str, Tensor], values: Mapping[str, Tensor]) -> None:
+        # CUDA 上数十个 scalar add/max 会产生大量微小 kernel；合并为一次向量归约。
+        # CPU 仍保留简单循环。统计语义和舍入顺序不变，checkpoint 继续使用命名字段。
+        if values and next(iter(values.values())).is_cuda and len(values) > 8 and destination:
+            names = tuple(values)
+            incoming = torch.stack([values[name] for name in names])
+            packed_previous = torch.stack([
+                destination[name] if name in destination else torch.zeros_like(values[name])
+                for name in names
+            ])
+            maxima = torch.tensor(
+                [name.endswith(("_abs_max", "_nonfinite")) for name in names],
+                dtype=torch.bool, device=incoming.device,
+            )
+            combined = torch.where(maxima, torch.maximum(packed_previous, incoming),
+                                   packed_previous + incoming)
+            destination.update(zip(names, combined.unbind(), strict=True))
+            return
         for name, value in values.items():
             previous = destination.get(name)
             if previous is None:

@@ -78,9 +78,11 @@ def value_diagnostics(predictions: Tensor, targets: Tensor) -> dict[str, Tensor]
     metrics = {**agent_statistics("value", prediction),
                **agent_statistics("target", target),
                **agent_statistics("td_error", error)}
+    bias = error.mean(0)
+    rmse = error.square().mean(0).sqrt()
     for i in range(prediction.shape[-1]):
         metrics[f"explained_variance_agent_{i}"] = ev[i]
-        metrics[f"value_bias_agent_{i}"] = error.mean(0)[i]
-        metrics[f"value_rmse_agent_{i}"] = error.square().mean(0).sqrt()[i]
+        metrics[f"value_bias_agent_{i}"] = bias[i]
+        metrics[f"value_rmse_agent_{i}"] = rmse[i]
     metrics["explained_variance"] = ev.mean()
     return metrics

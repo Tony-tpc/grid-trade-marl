@@ -194,7 +194,7 @@ class RolloutBuffer:
         expected = target[self.position].shape
         if value.shape != expected:
             raise ValueError(f"{name} 应为 {tuple(expected)}，实际为 {tuple(value.shape)}")
-        target[self.position].copy_(value.detach().to(device="cpu", dtype=target.dtype))
+        target[self.position].copy_(value.detach())
 
     def add(
         self,
@@ -371,7 +371,13 @@ class OnPolicyTrainer:
             pin_memory=self.device.type == "cuda",
         )
         for index in range(self.rollout_horizon):
-            observations, states, action_masks = self._tensors(steps)
+            # 环境原本在 CPU；保留原始张量写 rollout，避免先上卡再拷回观测/state/mask。
+            cpu_observations, cpu_states, cpu_masks = environment_steps_to_tensors(
+                steps, self.environment.spec, device="cpu"
+            )
+            observations = cpu_observations.to(self.device)
+            states = cpu_states.to(self.device)
+            action_masks = cpu_masks.to(self.device) if cpu_masks is not None else None
             with torch.inference_mode():
                 output = self.algorithm.sample(
                     observations,
@@ -380,7 +386,8 @@ class OnPolicyTrainer:
                 )
             if output.log_prob is None or output.values is None:
                 raise RuntimeError("on-policy sample 必须返回 log_prob 和 values")
-            next_steps = self.environment.step(output.actions.cpu().numpy())
+            cpu_actions = output.actions.cpu()
+            next_steps = self.environment.step(cpu_actions.numpy())
             rewards = torch.as_tensor(
                 np.stack([step.rewards for step in next_steps]), dtype=torch.float32
             )
@@ -391,15 +398,15 @@ class OnPolicyTrainer:
                 np.asarray([step.truncated for step in next_steps]), dtype=torch.bool
             ).unsqueeze(-1).expand(-1, self.environment.spec.num_agents)
             buffer.add(
-                observations=observations,
-                states=states,
-                actions=output.actions,
+                observations=cpu_observations,
+                states=cpu_states,
+                actions=cpu_actions,
                 rewards=rewards,
                 old_log_prob=output.log_prob,
                 old_values=output.values,
                 terminated=terminated,
                 truncated=truncated,
-                action_masks=action_masks,
+                action_masks=cpu_masks,
             )
             steps = next_steps
             if index + 1 < self.rollout_horizon and any(step.done for step in steps):

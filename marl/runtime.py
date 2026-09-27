@@ -105,6 +105,8 @@ class TensorReplayBuffer:
         self.pin_memory = pin_memory
         self.size = 0
         self.position = 0
+        self._sample_staging: dict[int, Tensor] = {}
+        self._sample_copy_done: torch.cuda.Event | None = None
         def allocate(*shape: int, dtype: torch.dtype) -> Tensor:
             return torch.empty(
                 (capacity, *shape), dtype=dtype, pin_memory=pin_memory
@@ -213,8 +215,22 @@ class TensorReplayBuffer:
         indices = torch.as_tensor(
             rng.choice(self.size, size=batch_size, replace=False), dtype=torch.long
         )
+        destination = torch.device(device)
+        reuse_staging = self.pin_memory and destination.type == "cuda"
+        if reuse_staging and self._sample_copy_done is not None:
+            # 先前异步 H2D 完成才能改写 host staging；返回的 GPU batch 始终独立拥有数据。
+            self._sample_copy_done.synchronize()
         def take(values: Tensor) -> Tensor:
-            return values.index_select(0, indices)
+            if not self.pin_memory:
+                return values.index_select(0, indices)
+            # 仅私有 host staging 可复用；CPU 公共 sample 返回独立 pinned 张量。
+            shape = (batch_size, *values.shape[1:])
+            sampled = self._sample_staging.get(id(values)) if reuse_staging else None
+            if sampled is None or sampled.shape != shape:
+                sampled = torch.empty(shape, dtype=values.dtype, pin_memory=True)
+                if reuse_staging:
+                    self._sample_staging[id(values)] = sampled
+            return torch.index_select(values, 0, indices, out=sampled)
         terminated = take(self.terminated).expand(-1, self.spec.num_agents)
         truncated = take(self.truncated).expand(-1, self.spec.num_agents)
         batch = MARLBatch(
@@ -231,7 +247,11 @@ class TensorReplayBuffer:
                 take(self.next_action_masks) if self.next_action_masks is not None else None
             ),
         )
-        return batch.to(device, non_blocking=True)
+        result = batch.to(destination, non_blocking=True)
+        if reuse_staging:
+            self._sample_copy_done = torch.cuda.Event()
+            self._sample_copy_done.record(torch.cuda.current_stream(destination))
+        return result
 
     def state_dict(self) -> dict[str, object]:
         """保存完整环形缓冲区，以便 checkpoint 后精确继续离策略训练。"""

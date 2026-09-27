@@ -10,9 +10,13 @@ import argparse
 import csv
 import hashlib
 import json
+import multiprocessing
+import subprocess
 import time
+import traceback
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
@@ -22,6 +26,13 @@ import numpy as np
 import torch
 from scipy.stats import t as student_t  # type: ignore[import-untyped]
 
+from benchmarks.run_state import (
+    TransitionSchedule,
+    atomic_json,
+    load_run,
+    save_run,
+    source_identity,
+)
 from marl.algorithms import (
     MAACConfig,
     MADDPGConfig,
@@ -34,7 +45,7 @@ from marl.algorithms.maac import MAACLossConfig, MAACUpdateConfig
 from marl.algorithms.maddpg import MADDPGLossConfig, MADDPGUpdateConfig
 from marl.algorithms.mappo import MAPPOLossConfig
 from marl.algorithms.masac import MASACLossConfig, MASACUpdateConfig
-from marl.config import AlgorithmConfig, config_to_dict
+from marl.config import AlgorithmConfig, algorithm_config_from_dict, config_to_dict
 from marl.envs import (
     ActionKind,
     MPE2SimpleAdversaryConfig,
@@ -116,6 +127,10 @@ class BenchmarkSettings:
     health_low_entropy_ratio: float = 0.01
     health_clip_rate_limit: float = 0.95
     health_warning_intervals: int = 3
+    learning_starts: int | None = None
+    train_every_transitions: int = 1
+    gradient_steps: int = 1
+    checkpoint_interval_steps: int = 1000
 
     def __post_init__(self) -> None:
         required = (
@@ -128,6 +143,11 @@ class BenchmarkSettings:
         )
         if any(value < 1 for value in required):
             raise ValueError("所有基准规模参数必须大于 0")
+        if min(self.train_every_transitions, self.gradient_steps,
+               self.checkpoint_interval_steps) < 1:
+            raise ValueError("更新频率、梯度步和 checkpoint 间隔必须为正")
+        if self.learning_starts is not None and self.learning_starts < self.replay_batch_size:
+            raise ValueError("learning_starts 不能小于 replay batch_size")
         if self.target_environment_steps is not None and self.target_environment_steps < 1:
             raise ValueError("target_environment_steps 必须大于 0 或为 None")
         for name in ("eval_interval_steps", "metrics_interval_steps"):
@@ -453,6 +473,7 @@ def _record_training_checkpoint(
     environment_steps: int,
     elapsed_seconds: float,
     audit_path: Path | None = None,
+    value_limit: float | None = None,
 ) -> None:
     """一次同步记录真实训练区间；不运行额外前向或改变训练随机数。"""
     previous_updates = history[-1]["updates"] if history else 0
@@ -473,6 +494,12 @@ def _record_training_checkpoint(
         value > 0 for key, value in metrics.items() if key.endswith("_nonfinite")
     ):
         raise FloatingPointError(f"非有限训练指标，已保留审计记录: {audit_path}")
+    if value_limit is not None:
+        excessive = {key: value for key, value in metrics.items()
+                     if key.startswith(("value_agent_", "target_agent_", "q2_agent_"))
+                     and key.endswith("_abs_max") and value > value_limit}
+        if excessive:
+            raise RuntimeError(f"原始价值尺度超过基准安全阈值 {value_limit}: {excessive}")
 
 
 def _training_metric_mean(history: list[dict[str, Any]]) -> dict[str, float]:
@@ -571,7 +598,11 @@ def _evaluation_checkpoint(
         with torch.random.fork_rng(devices=devices):
             baseline_name = "mappo" if action_kind == ActionKind.DISCRETE else "masac"
             torch.manual_seed(settings.evaluation_seed)
-            opponent = _algorithm_config(baseline_name, settings).build(algorithm.spec).to(device)
+            # 对手不能随被测稳定化开关改变，否则 LayerNorm 消融也换了控制组。
+            opponent_settings = replace(settings, layer_norm=False, normalize_targets=False)
+            opponent = _algorithm_config(baseline_name, opponent_settings).build(
+                algorithm.spec
+            ).to(device)
             for mode in ("deterministic", "stochastic"):
                 deterministic = mode == "deterministic"
                 for source in ("random", "untrained"):
@@ -748,6 +779,7 @@ def _train_off_policy(
     settings: BenchmarkSettings,
     device: torch.device,
     checkpoint_dir: Path | None,
+    *, resume: bool = False,
 ) -> tuple[dict[str, Any], BaseMARLAlgorithm]:
     action_kind = (
         ActionKind.DISCRETE
@@ -763,6 +795,10 @@ def _train_off_policy(
     ]
     vector = SyncVectorEnv(adapters)
     rng = np.random.default_rng(seed)
+    schedule = TransitionSchedule(
+        settings.learning_starts or settings.replay_batch_size,
+        settings.train_every_transitions, settings.gradient_steps,
+    )
     try:
         config = _algorithm_config(name, settings)
         experiment = build_experiment(vector.spec, config, device=device, seed=seed)
@@ -788,7 +824,7 @@ def _train_off_policy(
                 updates=0,
                 elapsed_seconds=0.0,
                 metric_rows=[],
-                audit_path=audit_path,
+                audit_path=None if resume else audit_path,
             )
         )
         started = time.perf_counter()
@@ -797,7 +833,24 @@ def _train_off_policy(
         metrics_interval = settings.resolved_metrics_interval_steps
         next_evaluation_step = eval_interval
         next_metrics_step = metrics_interval
-        for episode in range(iterations):
+        start_episode = 0
+        run_path = (checkpoint_dir.parent / "resume" / f"{name}_seed_{seed}.pt"
+                    if checkpoint_dir is not None else None)
+        if resume and run_path is not None and run_path.exists():
+            restored = load_run(run_path, trainer, asdict(settings),
+                                name=name, seed=seed, device=device)
+            start_episode, environment_steps = restored["episode"], restored["environment_steps"]
+            training_history, evaluation_history = (
+                restored["training_history"], restored["evaluation_history"]
+            )
+            metric_start = restored["metric_start"]
+            rng.bit_generator.state = restored["exploration_rng"]
+            schedule = TransitionSchedule(**restored["schedule"])
+            started -= restored["elapsed_seconds"]
+            next_evaluation_step = (environment_steps // eval_interval + 1) * eval_interval
+            next_metrics_step = (environment_steps // metrics_interval + 1) * metrics_interval
+            _restore_audit(audit_path, training_history, evaluation_history)
+        for episode in range(start_episode, iterations):
             seeds = [
                 seed + episode * settings.num_envs + environment_index
                 for environment_index in range(settings.num_envs)
@@ -814,14 +867,8 @@ def _train_off_policy(
                 seeds,
                 action_transform=action_transform,
             ):
-                size_before = len(trainer.replay)
                 trainer.record_many(transitions)
-                ready_updates = sum(
-                    min(trainer.replay_config.capacity, size_before + offset)
-                    >= trainer.replay_config.batch_size
-                    for offset in range(1, len(transitions) + 1)
-                )
-                for _ in range(ready_updates):
+                for _ in range(schedule.add(len(transitions))):
                     trainer.update()
                 environment_steps += len(transitions)
             completed_episode = episode + 1
@@ -835,6 +882,7 @@ def _train_off_policy(
                     environment_steps=environment_steps,
                     elapsed_seconds=time.perf_counter() - started,
                     audit_path=audit_path,
+                    value_limit=settings.health_value_limit,
                 )
                 while next_metrics_step <= environment_steps:
                     next_metrics_step += metrics_interval
@@ -857,6 +905,16 @@ def _train_off_policy(
                 metric_start = len(training_history)
                 while next_evaluation_step <= environment_steps:
                     next_evaluation_step += eval_interval
+            if run_path is not None and evaluate:
+                save_run(
+                    run_path, trainer, asdict(settings), name=name, seed=seed,
+                    episode=completed_episode, environment_steps=environment_steps,
+                    training_history=training_history, evaluation_history=evaluation_history,
+                    metric_start=metric_start, elapsed_seconds=time.perf_counter() - started,
+                    exploration_rng=dict(rng.bit_generator.state), schedule=asdict(schedule),
+                    checkpoint_interval=settings.checkpoint_interval_steps,
+                    total_steps=iterations * settings.num_envs * settings.horizon,
+                )
         checkpoint = _checkpoint_metadata(
             name,
             seed,
@@ -892,6 +950,7 @@ def _train_mappo(
     settings: BenchmarkSettings,
     device: torch.device,
     checkpoint_dir: Path | None,
+    *, resume: bool = False,
 ) -> tuple[dict[str, Any], BaseMARLAlgorithm]:
     adapters = [
         build_mpe2_simple_adversary(
@@ -925,7 +984,7 @@ def _train_mappo(
                 updates=0,
                 elapsed_seconds=0.0,
                 metric_rows=[],
-                audit_path=audit_path,
+                audit_path=None if resume else audit_path,
             )
         )
         started = time.perf_counter()
@@ -934,7 +993,22 @@ def _train_mappo(
         metrics_interval = settings.resolved_metrics_interval_steps
         next_evaluation_step = eval_interval
         next_metrics_step = metrics_interval
-        for episode in range(iterations):
+        start_episode = 0
+        run_path = (checkpoint_dir.parent / "resume" / f"mappo_seed_{seed}.pt"
+                    if checkpoint_dir is not None else None)
+        if resume and run_path is not None and run_path.exists():
+            restored = load_run(run_path, trainer, asdict(settings),
+                                name="mappo", seed=seed, device=device)
+            start_episode, environment_steps = restored["episode"], restored["environment_steps"]
+            training_history, evaluation_history = (
+                restored["training_history"], restored["evaluation_history"]
+            )
+            metric_start = restored["metric_start"]
+            started -= restored["elapsed_seconds"]
+            next_evaluation_step = (environment_steps // eval_interval + 1) * eval_interval
+            next_metrics_step = (environment_steps // metrics_interval + 1) * metrics_interval
+            _restore_audit(audit_path, training_history, evaluation_history)
+        for episode in range(start_episode, iterations):
             seeds = [
                 seed + episode * settings.num_envs + index
                 for index in range(settings.num_envs)
@@ -952,6 +1026,7 @@ def _train_mappo(
                     environment_steps=environment_steps,
                     elapsed_seconds=time.perf_counter() - started,
                     audit_path=audit_path,
+                    value_limit=settings.health_value_limit,
                 )
                 while next_metrics_step <= environment_steps:
                     next_metrics_step += metrics_interval
@@ -974,6 +1049,16 @@ def _train_mappo(
                 metric_start = len(training_history)
                 while next_evaluation_step <= environment_steps:
                     next_evaluation_step += eval_interval
+            if run_path is not None and evaluate:
+                save_run(
+                    run_path, trainer, asdict(settings), name="mappo", seed=seed,
+                    episode=completed_episode, environment_steps=environment_steps,
+                    training_history=training_history, evaluation_history=evaluation_history,
+                    metric_start=metric_start, elapsed_seconds=time.perf_counter() - started,
+                    exploration_rng=None, schedule=None,
+                    checkpoint_interval=settings.checkpoint_interval_steps,
+                    total_steps=iterations * settings.num_envs * settings.horizon,
+                )
         checkpoint = _checkpoint_metadata(
             "mappo",
             seed,
@@ -1080,7 +1165,7 @@ def _comparison_groups(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _cross_play_report(
-    trained: dict[tuple[str, int], BaseMARLAlgorithm],
+    trained: dict[tuple[str, int], BaseMARLAlgorithm | Path],
     settings: BenchmarkSettings,
     device: torch.device,
 ) -> list[dict[str, Any]]:
@@ -1100,10 +1185,12 @@ def _cross_play_report(
         action_kind = (
             ActionKind.DISCRETE if group == "discrete" else ActionKind.CONTINUOUS
         )
-        for _, _, adversary_algorithm in policies:
+        for _, _, adversary_source in policies:
+            adversary_algorithm = _load_policy(adversary_source, settings, action_kind, device)
             adversary_row: list[float] = []
             good_team_row: list[float] = []
-            for _, _, good_team_algorithm in policies:
+            for _, _, good_source in policies:
+                good_team_algorithm = _load_policy(good_source, settings, action_kind, device)
                 adversary_return, good_team_return = _evaluate_cross_play(
                     adversary_algorithm,
                     good_team_algorithm,
@@ -1114,8 +1201,11 @@ def _cross_play_report(
                 )
                 adversary_row.append(adversary_return)
                 good_team_row.append(good_team_return)
+                if good_team_algorithm is not adversary_algorithm:
+                    good_team_algorithm.cpu()
             adversary_matrix.append(adversary_row)
             good_team_matrix.append(good_team_row)
+            adversary_algorithm.cpu()
         reports.append(
             {
                 "action_kind": group,
@@ -1127,6 +1217,25 @@ def _cross_play_report(
             }
         )
     return reports
+
+
+def _load_policy(
+    source: BaseMARLAlgorithm | Path, settings: BenchmarkSettings,
+    action_kind: ActionKind, device: torch.device,
+) -> BaseMARLAlgorithm:
+    if not isinstance(source, Path):
+        return source.to(device)
+    state = torch.load(source, map_location="cpu", weights_only=False)
+    config = algorithm_config_from_dict(state["config"])
+    adapter = build_mpe2_simple_adversary(
+        MPE2SimpleAdversaryConfig(horizon=settings.horizon), action_kind=action_kind
+    )
+    try:
+        algorithm = config.build(adapter.spec)
+    finally:
+        adapter.close()
+    algorithm.load_state_dict(state["algorithm"])
+    return algorithm.to(device).eval()
 
 
 def write_summary_csv(report: dict[str, Any], output: Path) -> None:
@@ -1173,100 +1282,151 @@ def write_summary_csv(report: dict[str, Any], output: Path) -> None:
                 )
 
 
-def run_benchmark(
-    algorithms: list[str],
-    seeds: list[int],
-    settings: BenchmarkSettings,
-    *,
-    device: torch.device,
-    artifact_dir: Path | None = None,
-) -> dict[str, Any]:
-    """运行选定算法；单个算法失败时保留错误并继续其余项目。"""
+def _restore_audit(
+    path: Path | None, training: list[dict[str, Any]], evaluation: list[dict[str, Any]],
+) -> None:
+    if path is None:
+        return
+    if path.exists():
+        path.rename(path.with_suffix(f".before-resume-{time.time_ns()}.jsonl"))
+    events = [(p["environment_steps"], 0, "training", p) for p in training]
+    events.extend((p["environment_steps"], 1, "evaluation", p) for p in evaluation)
+    for _, _, kind, point in sorted(events, key=lambda item: item[:2]):
+        _write_audit_event(path, kind, point)
 
+
+def _run_one(
+    name: str, seed: int, settings: BenchmarkSettings, device: torch.device,
+    checkpoint_dir: Path | None, resume: bool, threads: int,
+) -> tuple[dict[str, Any], BaseMARLAlgorithm | Path | None]:
+    """一个算法×seed 一个独立任务；失败归档，其他任务继续。"""
+    torch.set_num_threads(threads)
+    completed = (checkpoint_dir.parent / "completed" / f"{name}_seed_{seed}.json"
+                 if checkpoint_dir is not None else None)
+    try:
+        if resume and completed is not None and completed.exists():
+            saved = json.loads(completed.read_text(encoding="utf-8"))
+            if (saved["settings"] != asdict(settings) or
+                    saved["source"]["source_sha256"] != source_identity()["source_sha256"]):
+                raise ValueError("已完成任务的源码/配置不同，不能跳过")
+            if saved.get("execution") != {"device": str(device), "torch_threads": threads}:
+                raise ValueError("已完成任务的设备/线程配置不同")
+            result = saved["result"]
+            checkpoint = Path(result["checkpoint"]["path"])
+            digest = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            if digest != result["checkpoint"]["sha256"]:
+                raise ValueError("已完成 checkpoint 校验失败")
+            if not result["execution_complete"] or not result["numerics_finite"]:
+                raise ValueError("已完成任务不满足完整性/有限值要求")
+            return result, checkpoint
+        resume = (resume and checkpoint_dir is not None
+                  and (checkpoint_dir.parent / "resume" / f"{name}_seed_{seed}.pt").is_file())
+        if name == "mappo":
+            result, algorithm = _train_mappo(seed, settings, device, checkpoint_dir, resume=resume)
+        else:
+            result, algorithm = _train_off_policy(
+                name, seed, settings, device, checkpoint_dir, resume=resume
+            )
+        result["source"] = source_identity()
+        if completed is not None:
+            atomic_json(completed, {"settings": asdict(settings), "source": source_identity(),
+                                    "execution": {"device": str(device), "torch_threads": threads},
+                                    "result": result})
+            return result, Path(result["checkpoint"]["path"])
+        return result, algorithm.cpu()
+    except Exception as error:  # noqa: BLE001 - 每个任务保留异常与未完成标记。
+        result = {"seed": seed, "status": "failed", "execution_complete": False,
+                  "error": f"{type(error).__name__}: {error}", "traceback": traceback.format_exc()}
+        if checkpoint_dir is not None:
+            atomic_json(checkpoint_dir.parent / "failures" / f"{name}_seed_{seed}.json", result)
+        return result, None
+
+
+def run_benchmark(
+    algorithms: list[str], seeds: list[int], settings: BenchmarkSettings, *,
+    device: torch.device, artifact_dir: Path | None = None,
+    workers: int = 1, resume: bool = False, threads: int = 1,
+) -> dict[str, Any]:
+    """复用相同种子任务；Windows spawn 并行，不引入第二套训练循环。"""
+    if workers < 1 or threads < 1:
+        raise ValueError("workers/threads 必须为正")
+    if device.type == "cuda" and workers != 1:
+        raise ValueError("单张 CUDA 显卡只允许一个训练 worker")
+    if (workers > 1 or resume) and artifact_dir is None:
+        raise ValueError("并行或续训必须指定 artifact_dir")
+    if workers > 1 and threads != 1:
+        raise ValueError("多 worker 模式每个进程固定一个 Torch 线程")
+    started = time.perf_counter()
     results: list[dict[str, Any]] = []
-    trained: dict[tuple[str, int], BaseMARLAlgorithm] = {}
+    trained: dict[tuple[str, int], BaseMARLAlgorithm | Path] = {}
     checkpoint_dir = artifact_dir / "checkpoints" if artifact_dir is not None else None
+    rows: dict[tuple[str, int], dict[str, Any]] = {}
+    tasks = [(name, seed) for name in algorithms if name != "qmix" for seed in seeds]
+    if workers == 1:
+        for name, seed in tasks:
+            row, policy = _run_one(name, seed, settings, device, checkpoint_dir, resume, threads)
+            rows[name, seed] = row
+            if policy is not None:
+                trained[name, seed] = policy
+    else:
+        with ProcessPoolExecutor(
+            max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+        ) as pool:
+            futures = {pool.submit(_run_one, name, seed, settings, device,
+                                   checkpoint_dir, resume, threads): (name, seed)
+                       for name, seed in tasks}
+            for future in as_completed(futures):
+                key = futures[future]
+                try:
+                    row, policy = future.result()
+                except Exception as error:  # noqa: BLE001 - 包括 worker 意外退出。
+                    row, policy = {"seed": key[1], "status": "failed",
+                                   "error": f"{type(error).__name__}: {error}"}, None
+                rows[key] = row
+                if policy is not None:
+                    trained[key] = policy
     for name in algorithms:
         if name == "qmix":
-            try:
-                results.append(_qmix_incompatibility(settings))
-            except Exception as error:  # noqa: BLE001 - 基准必须保留其他算法结果。
-                results.append(
-                    {
-                        "algorithm": name,
-                        "status": "failed",
-                        "error": f"{type(error).__name__}: {error}",
-                    }
-                )
+            results.append(_qmix_incompatibility(settings))
             continue
-
-        seed_results: list[dict[str, Any]] = []
-        error_text: str | None = None
-        for seed in seeds:
-            try:
-                if name == "mappo":
-                    seed_result, algorithm = _train_mappo(
-                        seed, settings, device, checkpoint_dir
-                    )
-                else:
-                    seed_result, algorithm = _train_off_policy(
-                        name, seed, settings, device, checkpoint_dir
-                    )
-                seed_results.append(seed_result)
-                trained[(name, seed)] = algorithm
-            except Exception as error:  # noqa: BLE001 - JSON 需要记录具体失败。
-                error_text = f"seed={seed} {type(error).__name__}: {error}"
-                break
-        if error_text is not None:
-            results.append(
-                {
-                    "algorithm": name,
-                    "status": "failed",
-                    "error": error_text,
-                    "seeds": seed_results,
-                }
-            )
-            continue
-        results.append(
-            {
-                "algorithm": name,
-                "status": "passed",
-                "seeds": seed_results,
-                "output_complete": all(
-                    result["output_complete"] for result in seed_results
-                ),
-                "numerically_stable": all(
-                    result["numerically_stable"] for result in seed_results
-                ),
-            }
-        )
-
+        seed_results = [rows[name, seed] for seed in seeds]
+        failures = [row for row in seed_results if "error" in row]
+        success = [row for row in seed_results if "error" not in row]
+        results.append({
+            "algorithm": name, "status": "failed" if failures else "passed", "seeds": success,
+            "failures": failures,
+            "output_complete": not failures and all(row["output_complete"] for row in success),
+            "numerically_stable": not failures and all(row["numerics_finite"] for row in success),
+        })
     report = {
-        "report_schema_version": 2,
-        "benchmark": "Farama MPE2 simple_adversary_v3",
-        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "device": str(device),
-        "versions": {
-            package: version(package)
-            for package in ("gymnasium", "pettingzoo", "mpe2", "torch")
-        },
+        "report_schema_version": 3, "benchmark": "Farama MPE2 simple_adversary_v3",
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(), "device": str(device),
+        "source": source_identity(), "workers": workers, "torch_threads_per_worker": threads,
+        "gpu_telemetry": _gpu_telemetry(),
+        "versions": {package: version(package)
+                     for package in ("gymnasium", "pettingzoo", "mpe2", "torch")},
         "settings": asdict(settings),
-        "audit_schedule": {
-            "eval_interval_steps": settings.resolved_eval_interval_steps,
-            "metrics_interval_steps": settings.resolved_metrics_interval_steps,
-            "metrics_weighting": "algorithm_update_count",
-            "gradient_clip_rate": "actual clipped optimizer steps / optimizer steps",
-        },
+        "audit_schedule": {"eval_interval_steps": settings.resolved_eval_interval_steps,
+                           "metrics_interval_steps": settings.resolved_metrics_interval_steps,
+                           "metrics_weighting": "algorithm_update_count",
+                           "gradient_clip_rate": "actual clipped steps / optimizer steps"},
         "seeds": seeds,
-        "stability_definition": (
-            "completed updates with finite metrics, parameters and periodic per-agent "
-            "evaluation returns across all seeds; this is not a convergence claim"
-        ),
-        "results": results,
-        "comparison_groups": _comparison_groups(results),
+        "stability_definition": "finite is not convergence; inspect health and opponents",
+        "results": results, "comparison_groups": _comparison_groups(results),
         "cross_play": _cross_play_report(trained, settings, device),
     }
+    report["total_wall_clock_seconds"] = time.perf_counter() - started
     return report
+
+
+def _gpu_telemetry() -> dict[str, Any]:
+    try:
+        sample = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name,clocks.sm,temperature.gpu,power.draw,utilization.gpu",
+             "--format=csv,noheader"], text=True, timeout=5).strip()
+        return {"sample": sample, "note": "结束时快照，不用于解释整段训练耗时"}
+    except (OSError, subprocess.SubprocessError):
+        return {"status": "unavailable"}
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1298,6 +1458,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--layer-norm", action="store_true")
     parser.add_argument("--normalize-targets", action="store_true")
     parser.add_argument("--torch-threads", type=int, default=1)
+    parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--learning-starts", type=int)
+    parser.add_argument("--train-every-transitions", type=int, default=1)
+    parser.add_argument("--gradient-steps", type=int, default=1)
+    parser.add_argument("--checkpoint-interval-steps", type=int, default=1000)
     parser.add_argument("--basic-evaluation", action="store_true",
                         help="仅自博弈评估；用于单独测量运行路径，不用于最终学习验收")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
@@ -1326,6 +1492,10 @@ def main() -> None:
         layer_norm=args.layer_norm,
         normalize_targets=args.normalize_targets,
         detailed_evaluation=not args.basic_evaluation,
+        learning_starts=args.learning_starts,
+        train_every_transitions=args.train_every_transitions,
+        gradient_steps=args.gradient_steps,
+        checkpoint_interval_steps=args.checkpoint_interval_steps,
     )
     torch.set_num_threads(args.torch_threads)
     device = resolve_device(args.device)
@@ -1338,6 +1508,7 @@ def main() -> None:
         settings,
         device=device,
         artifact_dir=artifact_dir,
+        workers=args.workers, resume=args.resume, threads=args.torch_threads,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
@@ -1349,7 +1520,7 @@ def main() -> None:
     for result in report["results"]:
         print(
             f"algorithm={result['algorithm']} status={result['status']} "
-            f"stable={result.get('numerically_stable')} "
+            f"finite={result.get('numerically_stable')} "
             f"complete={result.get('output_complete')}"
         )
     print(f"report={args.output.resolve()}")

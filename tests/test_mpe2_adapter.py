@@ -18,6 +18,7 @@ from benchmarks.benchmark_noncooperative import (
     write_summary_csv,
 )
 from benchmarks.plot_noncooperative import generate_plots
+from benchmarks.validate_report import validate_report
 from marl.algorithms import QMIXConfig
 from marl.envs import (
     ActionKind,
@@ -255,9 +256,12 @@ def test_all_algorithms_have_complete_noncooperative_smoke_report(
 
     report_path = tmp_path / "report.json"
     report_path.write_text(json.dumps(report), encoding="utf-8")
-    summary_path = tmp_path / "summary.csv"
+    summary_path = report_path.with_suffix(".csv")
     write_summary_csv(report, summary_path)
     assert len(summary_path.read_text(encoding="utf-8").splitlines()) == 5
+    validation = validate_report(report_path)
+    assert validation["execution_and_artifacts_passed"]
+    assert validation["validated_runs"] == 4
     plots = generate_plots(report_path, tmp_path / "plots")
     assert {plot.name for plot in plots} == {
         "learning_curves_discrete.png",

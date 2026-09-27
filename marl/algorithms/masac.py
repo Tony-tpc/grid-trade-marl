@@ -197,7 +197,15 @@ class MASAC(BaseMARLAlgorithm):
     def compute_temperature_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """只更新 log alpha；策略 log-prob 在目标内部显式 detach。"""
 
-        _, temperature_result = self._actor_and_temperature_results(batch)
+        self._validate_training_batch(batch)
+        # 必须在 actor 更新后重新采样；温度目标不需要任何 critic 前向。
+        with torch.no_grad():
+            output = self.policy.act(batch.observations)
+        assert output.log_prob is not None
+        temperature_result = self.entropy_objective.temperature(output.log_prob)
+        temperature_result = ObjectiveResult(temperature_result.loss, {
+            **temperature_result.metrics,
+            **agent_statistics("alpha", self.entropy_objective.alpha)})
         return LossBundle.combine((temperature_result,))
 
     def update(

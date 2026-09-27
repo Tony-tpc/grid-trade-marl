@@ -14,7 +14,12 @@ from marl.core import MARLBatch
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
 from marl.modules.critic import AttentionQConfig, AttentionQNetwork
-from marl.modules.policy import AgentLogitsPolicy, DiscretePolicy, IndependentDiscreteConfig
+from marl.modules.policy import (
+    AgentLogitsPolicy,
+    DiscretePolicy,
+    IndependentDiscreteConfig,
+    IndependentDiscretePolicy,
+)
 from marl.objectives import (
     CounterfactualPolicyObjective,
     EntropyObjective,
@@ -247,7 +252,8 @@ class MAAC(BaseMARLAlgorithm):
                     actor,
                     runtime.max_grad_norm("actor"),
                     parameters=runtime.parameters("actor"),
-                    drop_zero_gradients=True,
+                    # 内置独立 actor 的未参与参数天然 grad=None；外部拓扑保留安全回退。
+                    drop_zero_gradients=not isinstance(self.policy, IndependentDiscretePolicy),
                 )
             )
             runtime.record_optimizer_step("actor", actor_norms[-1])
