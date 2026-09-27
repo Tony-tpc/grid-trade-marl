@@ -29,6 +29,7 @@ from marl.training.off_policy import (
     ReplayConfig,
 )
 from marl.training.optimization import OptimizerRuntime
+from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,7 @@ class MAACUpdateConfig(ActorCriticUpdateConfig):
 @dataclass(frozen=True, slots=True)
 class MAACLossConfig:
     td_coefficient: float = 1.0
+    normalize_targets: bool = False
     entropy_coefficient: float = 0.01
 
     def __post_init__(self) -> None:
@@ -81,6 +83,7 @@ class MAAC(BaseMARLAlgorithm):
         self.target_policy = frozen_target(self.policy)
         self.target_critic = frozen_target(self.critic)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
         self.policy_objective = CounterfactualPolicyObjective()
         self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
         self.return_estimator: ValueTargetEstimator = config.value_target.build()
@@ -127,7 +130,9 @@ class MAAC(BaseMARLAlgorithm):
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MAAC 训练需要 actions/rewards/next_observations")
 
-    def compute_critic_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+    def compute_critic_loss_bundle(
+        self, batch: MARLBatch, *, update_statistics: bool = False
+    ) -> LossBundle:
         """使用 replay 联合动作回归逐智能体 TD target。"""
 
         self._validate_training_batch(batch)
@@ -157,8 +162,13 @@ class MAAC(BaseMARLAlgorithm):
             target_q = self.return_estimator.estimate(
                 batch.rewards, soft_next_q, terminated
             )
-        critic_result = self.td_loss(chosen_q, target_q)
-        return LossBundle.combine((critic_result,))
+        if update_statistics:
+            self.target_scale.update(target_q)
+        critic_result = self.td_loss(self.target_scale(chosen_q), self.target_scale(target_q))
+        bundle = LossBundle.combine((critic_result,))
+        return LossBundle(bundle.total, {**bundle.terms,
+            **value_diagnostics(chosen_q, target_q),
+            **agent_statistics("reward", batch.rewards)})
 
     def compute_actor_loss_bundle(
         self,
@@ -207,16 +217,17 @@ class MAAC(BaseMARLAlgorithm):
 
         device = batch.observations.device
         with runtime.autocast(device):
-            critic = self.compute_critic_loss_bundle(batch)
+            critic = self.compute_critic_loss_bundle(batch, update_statistics=True)
         critic_norm = self.optimize(
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
             parameters=runtime.parameters("critic"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("critic", critic_norm)
         actor_totals: dict[str, Tensor] = {}
         actor_norms: list[Tensor] = []
+        agent_metrics: dict[str, Tensor] = {}
         with torch.no_grad():
             current_actions = self.policy.act(
                 batch.observations,
@@ -239,13 +250,15 @@ class MAAC(BaseMARLAlgorithm):
                     drop_zero_gradients=True,
                 )
             )
-            runtime.record_optimizer_step()
+            runtime.record_optimizer_step("actor", actor_norms[-1])
+            agent_metrics[f"entropy_agent_{agent_index}_mean"] = actor.terms["entropy"].detach()
             for name, value in actor.terms.items():
                 actor_totals[name] = (
                     actor_totals.get(name, torch.zeros_like(value)) + value.detach()
                 )
         runtime.finish(self.target_pairs())
         metrics = dict(critic.terms)
+        metrics.update(agent_metrics)
         metrics.update(
             {name: value / self.spec.num_agents for name, value in actor_totals.items()}
         )

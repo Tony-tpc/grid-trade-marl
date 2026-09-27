@@ -82,7 +82,8 @@ class IndependentDiscretePolicy(nn.Module):
     """每个同构智能体拥有独立离散 Actor 的策略拓扑。"""
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
+        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
@@ -90,7 +91,7 @@ class IndependentDiscretePolicy(nn.Module):
         self.action_dim = action_dim
         self.actors = nn.ModuleList(
             Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim),
+                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
                 DiscreteActionHead(hidden_dim, action_dim),
             )
             for _ in range(num_agents)
@@ -200,7 +201,8 @@ class IndependentDeterministicPolicy(nn.Module):
     """每个智能体拥有独立确定性连续 Actor 的策略拓扑。"""
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
+        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
@@ -208,7 +210,7 @@ class IndependentDeterministicPolicy(nn.Module):
         self.action_dim = action_dim
         self.actors = nn.ModuleList(
             Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim),
+                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
                 DeterministicActionHead(hidden_dim, action_dim),
             )
             for _ in range(num_agents)
@@ -242,7 +244,8 @@ class IndependentGaussianPolicy(nn.Module):
     """每个智能体拥有独立 tanh-Gaussian Actor 的策略拓扑。"""
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int
+        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
@@ -250,7 +253,7 @@ class IndependentGaussianPolicy(nn.Module):
         self.action_dim = action_dim
         self.actors = nn.ModuleList(
             Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim),
+                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
                 GaussianActionHead(hidden_dim, action_dim),
             )
             for _ in range(num_agents)
@@ -317,6 +320,7 @@ class SharedDiscreteQPolicy(nn.Module):
 class IndependentDiscreteConfig:
     kind: Literal["independent_discrete"] = "independent_discrete"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -325,6 +329,7 @@ class IndependentDiscreteConfig:
     def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy:
         return IndependentDiscretePolicy(
             spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+            self.layer_norm,
         )
 
 
@@ -332,6 +337,7 @@ class IndependentDiscreteConfig:
 class IndependentDeterministicConfig:
     kind: Literal["independent_deterministic"] = "independent_deterministic"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -340,6 +346,7 @@ class IndependentDeterministicConfig:
     def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy:
         return IndependentDeterministicPolicy(
             spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+            self.layer_norm,
         )
 
 
@@ -347,6 +354,7 @@ class IndependentDeterministicConfig:
 class IndependentGaussianConfig:
     kind: Literal["independent_gaussian"] = "independent_gaussian"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -355,6 +363,7 @@ class IndependentGaussianConfig:
     def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy:
         return IndependentGaussianPolicy(
             spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+            self.layer_norm,
         )
 
 

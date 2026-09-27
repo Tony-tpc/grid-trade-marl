@@ -25,6 +25,7 @@ dev = [
 benchmark = [
     "mpe2>=1.1,<2.0",
     "matplotlib>=3.9,<4.0",
+    "scipy>=1.11,<2.0",
 ]
 
 [tool.setuptools.packages.find]

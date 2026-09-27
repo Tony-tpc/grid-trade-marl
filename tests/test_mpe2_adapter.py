@@ -218,11 +218,25 @@ def test_all_algorithms_have_complete_noncooperative_smoke_report(
         seed_result = results[algorithm]["seeds"][0]
         assert seed_result["environment_steps"] == 2
         assert len(seed_result["evaluation_history"]) == 2
+        assert len(seed_result["training_history"]) == 1
+        assert seed_result["audit_counts"] == {"training_points": 1, "evaluation_points": 2}
+        assert seed_result["convergence_assessment"] == "not_established"
+        assert seed_result["gradient_clip_rate_available"]
+        assert seed_result["execution_complete"]
+        assert seed_result["numerics_finite"]
+        assert "optimization_health" in seed_result
+        assert len(seed_result["evaluation_history"][0]["fixed_opponent_evaluations"]) == 9
         assert seed_result["evaluation_history"][0]["environment_steps"] == 0
         assert seed_result["evaluation_history"][0]["updates"] == 0
         assert seed_result["optimizer_steps"] >= seed_result["updates"]
         assert len(seed_result["checkpoint"]["sha256"]) == 64
         assert Path(seed_result["checkpoint"]["path"]).is_file()
+        audit_lines = Path(seed_result["checkpoint"]["audit_log_path"]).read_text(
+            encoding="utf-8"
+        ).splitlines()
+        events = [json.loads(line) for line in audit_lines]
+        assert [event["kind"] for event in events] == ["evaluation", "training", "evaluation"]
+        assert [event["environment_steps"] for event in events] == [0, 2, 2]
     assert results["qmix"]["status"] == "expected_incompatible"
     assert report["comparison_groups"]["discrete"]["algorithms"] == ["maac", "mappo"]
     assert report["comparison_groups"]["continuous"]["algorithms"] == [
@@ -259,8 +273,28 @@ def test_all_algorithms_have_complete_noncooperative_smoke_report(
         "cross_play_discrete.png",
         "cross_play_continuous.png",
         "training_efficiency.png",
+        "return_comparison_discrete.png",
+        "return_comparison_continuous.png",
+        "convergence_diagnostics_discrete.png",
+        "convergence_diagnostics_continuous.png",
+        "optimizer_losses_discrete.png",
+        "optimizer_losses_continuous.png",
+        "progress_timing_discrete.png",
+        "progress_timing_continuous.png",
+        "agent_diagnostics_discrete.png",
+        "agent_diagnostics_continuous.png",
+        "gradient_clip_rates_discrete.png",
+        "gradient_clip_rates_continuous.png",
+        "fixed_opponents_discrete_deterministic.png",
+        "fixed_opponents_discrete_stochastic.png",
+        "fixed_opponents_continuous_deterministic.png",
+        "fixed_opponents_continuous_stochastic.png",
     }
     assert all(plot.stat().st_size > 0 for plot in plots)
+    audit = json.loads((tmp_path / "plots" / "plot_audit.json").read_text(encoding="utf-8"))
+    assert audit["interpolated_points"] == 0
+    assert len(audit["sampling_coverage"]) == 4
+    assert (tmp_path / "plots" / "README.md").is_file()
 
 
 def test_benchmark_requires_exact_training_and_evaluation_step_boundaries() -> None:

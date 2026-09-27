@@ -4,15 +4,18 @@ schema_version: 1  # 必填；配置版本，只允许整数 1。
 algorithm: maac  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
+  layer_norm: false  # 可选；各隐藏层 LayerNorm，默认关闭。
   kind: independent_discrete  # 可选；组件实现名称，默认值如本行。
   hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
 critic:
+  layer_norm: false  # 可选；critic 隐藏层 LayerNorm，默认关闭。
   kind: attention_q  # 可选；组件实现名称，默认值如本行。
   hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
   attention_heads: 4  # 可选；注意力头数，必须 > 0 且整除 hidden_dim。
 
 loss:
+  normalize_targets: false  # 可选；逐智能体 target 运行尺度，保留原始 V/Q 单位。
   td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。
   entropy_coefficient: 0.01  # 可选；探索熵权重，必须 >= 0。
 

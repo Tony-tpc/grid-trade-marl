@@ -100,10 +100,12 @@ class CentralizedCritic(nn.Module):
 class IndependentCentralizedCritics(nn.Module):
     """参数独立的逐智能体集中式 Q 网络。"""
 
-    def __init__(self, num_agents: int, input_dim: int, hidden_dim: int) -> None:
+    def __init__(
+        self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool = False
+    ) -> None:
         super().__init__()
         self.critics = nn.ModuleList(
-            CentralizedCritic(MLPBackbone(input_dim, output_dim=hidden_dim))
+            CentralizedCritic(MLPBackbone(input_dim, output_dim=hidden_dim, layer_norm=layer_norm))
             for _ in range(num_agents)
         )
 
@@ -117,10 +119,12 @@ class IndependentCentralizedCritics(nn.Module):
 class TwinIndependentCentralizedCritics(nn.Module):
     """MASAC 使用的两组独立集中式 Q 网络。"""
 
-    def __init__(self, num_agents: int, input_dim: int, hidden_dim: int) -> None:
+    def __init__(
+        self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool = False
+    ) -> None:
         super().__init__()
-        self.first = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim)
-        self.second = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim)
+        self.first = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim, layer_norm)
+        self.second = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim, layer_norm)
 
     def forward(self, centralized_input: Tensor) -> tuple[Tensor, Tensor]:
         return self.first(centralized_input), self.second(centralized_input)
@@ -142,6 +146,7 @@ class AttentionCritic(nn.Module):
         action_dim: int,
         hidden_dim: int,
         attention_heads: int,
+        layer_norm: bool = False,
     ) -> None:
         super().__init__()
         if hidden_dim % attention_heads:
@@ -151,12 +156,14 @@ class AttentionCritic(nn.Module):
         self.action_dim = action_dim
         self.hidden_dim = hidden_dim
         self.own_encoders = nn.ModuleList(
-            nn.Sequential(nn.Linear(observation_dim, hidden_dim), nn.ReLU())
+            nn.Sequential(nn.Linear(observation_dim, hidden_dim),
+                          *([nn.LayerNorm(hidden_dim)] if layer_norm else []), nn.ReLU())
             for _ in range(num_agents)
         )
         self.state_action_encoders = nn.ModuleList(
             nn.Sequential(
                 nn.Linear(observation_dim + action_dim, hidden_dim),
+                *([nn.LayerNorm(hidden_dim)] if layer_norm else []),
                 nn.ReLU(),
             )
             for _ in range(num_agents)
@@ -170,6 +177,7 @@ class AttentionCritic(nn.Module):
         self.q_heads = nn.ModuleList(
             nn.Sequential(
                 nn.Linear(2 * hidden_dim, hidden_dim),
+                *([nn.LayerNorm(hidden_dim)] if layer_norm else []),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, action_dim),
             )
@@ -231,6 +239,7 @@ class AttentionCritic(nn.Module):
 class CentralizedValueConfig:
     kind: Literal["centralized_value"] = "centralized_value"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -238,7 +247,7 @@ class CentralizedValueConfig:
 
     def build(self, spec: EnvironmentSpec) -> CentralizedCritic:
         return CentralizedCritic(
-            MLPBackbone(spec.state_dim, output_dim=self.hidden_dim),
+            MLPBackbone(spec.state_dim, output_dim=self.hidden_dim, layer_norm=self.layer_norm),
             output_dim=spec.num_agents,
         )
 
@@ -248,6 +257,7 @@ class AttentionQConfig:
     kind: Literal["attention_q"] = "attention_q"
     hidden_dim: int = 128
     attention_heads: int = 4
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -262,6 +272,7 @@ class AttentionQConfig:
             spec.action_dim,
             self.hidden_dim,
             self.attention_heads,
+            self.layer_norm,
         )
 
 
@@ -269,6 +280,7 @@ class AttentionQConfig:
 class IndependentQConfig:
     kind: Literal["independent_centralized_q"] = "independent_centralized_q"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -279,6 +291,7 @@ class IndependentQConfig:
             spec.num_agents,
             spec.num_agents * (spec.observation_dim + spec.action_dim),
             self.hidden_dim,
+            self.layer_norm,
         )
 
 
@@ -286,6 +299,7 @@ class IndependentQConfig:
 class TwinQConfig:
     kind: Literal["twin_independent_centralized_q"] = "twin_independent_centralized_q"
     hidden_dim: int = 128
+    layer_norm: bool = False
 
     def __post_init__(self) -> None:
         if self.hidden_dim < 1:
@@ -296,4 +310,5 @@ class TwinQConfig:
             spec.num_agents,
             spec.num_agents * (spec.observation_dim + spec.action_dim),
             self.hidden_dim,
+            self.layer_norm,
         )

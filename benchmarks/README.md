@@ -76,7 +76,7 @@ good-agent actors 组合，在统一 seed 上评估；报告保留 adversary 和
 ```powershell
 .\.venv\Scripts\python.exe benchmarks\benchmark_noncooperative.py `
   --device auto --seeds 7 17 29 41 53 --environment-steps 100000 `
-  --num-envs 4 --horizon 25 --eval-episodes 10 --eval-interval-steps 10000 `
+  --num-envs 4 --horizon 25 --eval-episodes 10 `
   --output benchmark-results\mpe2_simple_adversary_full.json
 .\.venv\Scripts\python.exe benchmarks\plot_noncooperative.py `
   benchmark-results\mpe2_simple_adversary_full.json `
@@ -88,7 +88,7 @@ good-agent actors 组合，在统一 seed 上评估；报告保留 adversary 和
 JSON 同目录还会生成 CSV 摘要和 `<report>_artifacts/checkpoints/` 下的最终 checkpoint；
 每个 seed 记录配置快照、MPE2 版本、CUDA/GPU、update/optimizer-step 数与 SHA-256。
 
-绘图命令生成十三张图片：
+绘图命令生成二十一张图片（两个动作组齐全时），以及中文读图说明和数据覆盖清单：
 
 - `learning_curves_{discrete,continuous}.png`：含 step 0 的分组学习曲线；
 - `final_returns_{discrete,continuous}.png`：分动作空间、分角色终局回报与 95% CI；
@@ -98,6 +98,80 @@ JSON 同目录还会生成 CSV 摘要和 `<report>_artifacts/checkpoints/` 下�
   离散熵比例、PPO 诊断与 SAC alpha；
 - `cross_play_{discrete,continuous}.png`：对手与协作方分开的 cross-play 热力图；
 - `training_efficiency.png`：相同交互预算下的耗时和环境吞吐率。
+- `return_comparison_{discrete,continuous}.png`：按角色叠加不同算法的学习曲线，
+  同时显示每个 seed，避免在分离的子图中难以比较。
+- `convergence_diagnostics_{discrete,continuous}.png`：最近 5 个真实评估点的回报
+  斜率（每 1000 步变化）与时间标准差；仅观察趋势，不能证明学习成功或纳什均衡。
+- `optimizer_losses_{discrete,continuous}.png`：actor/policy 与 critic/value 损失分开，
+  使用 symlog 坐标显示负 loss 与数量级变化，不跨算法比较 loss 大小。
+- `progress_timing_{discrete,continuous}.png`：各 seed 的逐区间墙钟吞吐，帮助识别
+  何时变慢；包含区间内评估开销，不冒充纯 optimizer 性能。
+- `README.md` 与 `plot_audit.json`：读图方法、每个 seed 的实际采样点数、最大评估
+  间隔和旧报告缺少的数据。图表不插值补造点，缺失指标不补零。
+
+### 审计采样与收敛诊断
+
+训练指标与策略评估分别采样：`--metrics-interval-steps` 默认一个完整 rollout
+（4 环境 × 25 步 = 100 环境步）；`--eval-interval-steps` 默认按总预算划分约 100 个
+区间并向上对齐完整 rollout。两参数都可显式设置，必须是 `num_envs*horizon` 的倍数。
+评估边界与训练终点也会 flush 诊断，因此不会漏掉最后不足一个区间的数据。
+
+| 训练预算 | 默认训练诊断点 | 默认策略评估点（含 step 0） |
+|---|---:|---:|
+| 10,000 步 | 100 | 101 |
+| 100,000 步 | 1,000 | 101 |
+
+`training_history` 保存独立的训练指标序列、环境步、update/optimizer-step 计数和时间。
+评估区间指标按实际 algorithm update 次数加权，避免 warm-up 和末尾短区间被等权处理。
+增加训练诊断不执行额外模型前向；更频繁的策略评估会增加运行时间，需结合吞吐图审查。
+
+有 artifact 目录时，每个 seed 的训练/评估事件逐点写入
+`<report>_artifacts/diagnostics/<algorithm>_seed_<seed>.jsonl`，异常退出后仍可审计已完成区间。
+该 JSONL 是诊断证据，不是可以恢复 optimizer 的 checkpoint。
+
+旧 100k 报告只有 11 个评估点，无法恢复真实的密集历史；新绘图程序会如实显示其稀疏性。
+不将曲线插值、平滑或重复评估最终 checkpoint 当作历史训练数据。
+少于 5 个评估点时，滚动图明确显示数据不足。斜率趋近零也可能是策略停滞，必须结合
+原始回报、逐 seed 波动、critic 误差与固定对手测试解释。
+
+回报阴影使用跨训练 seed 的 Student-t 95% 区间，小样本下不作为显著性证明。
+旧报告的 `gradient_clip_rate` 不能恢复；新版从实际 optimizer-step 事件计数，
+区间合并时保留计数与峰值，不用平均梯度反推裁剪率。
+
+## 稳定性改造与审计
+
+- `--layer-norm`：策略与 critic 隐藏层启用 LayerNorm；默认关闭。
+- `--normalize-targets`：逐智能体 Welford target 统计，同时缩放预测和标签用于
+  critic 误差；最小标准差 1。网络公开输出、bootstrap、actor Q 仍为原始单位。
+  这不是 PopArt，不能据 normalized loss 变小宣称稳定。
+- MAPPO 每份 fresh rollout 更新一次统计，所有 epoch 固定；MASAC 两个 critic
+  每次更新共用一次统计。统计随模型保存，诊断 loss 默认不修改统计。
+- tanh-Gaussian 使用 PyTorch 稳定 Jacobian；entropy 表示随机样本的
+  `-log_prob`，与原始高斯解析熵区分。确定性动作的 surprisal 不代表熵。
+- 新报告拆分执行完整性、数值有限性、优化警报和学习评估；保留旧
+  `numerically_stable` 字段仅作有限值兼容，不代表价值不漂移或策略收敛。
+- 逐智能体记录 V/Q、target、TD error 的均值/峰值/非有限事件，以及 RMSE、
+  bias、explained variance。高裁剪率或低离散熵持续三个诊断区间触发警报。
+  价值绝对值 10,000 为本基准经验警报，阈值保存在 settings，不是理论边界。
+  非有限诊断在最近日志边界中止该运行；不是逐 GPU kernel 同步检查。
+- 固定随机对手和固定未训练对手分别替换一侧；共同场景种子与训练分离，
+  同时输出确定性/随机评估。评估使用独立 RNG 上下文，不消耗训练 RNG。
+- 新版完整报告额外生成逐智能体尺度、真实裁剪率和固定对手学习曲线，
+  四算法完整报告共 **29 张图**。旧报告按已有字段生成，不补造历史。
+- trainer/optimizer checkpoint schema 升级到 3；旧 schema 不静默续训，
+  可显式加载 algorithm 权重作诊断。关闭稳定化开关时原网络权重结构不变。
+
+本轮 2k 步 × seeds 7/17 × 四算法 × 四候选（32 runs）全部运行完整、数值有限。
+基准、仅 LayerNorm、仅 target 标准化、组合四组分别保持同一学习率、batch 和 UTD。
+组合组未触发当前短程警报，选为 10k×3 候选，不修改库默认配置：
+MAAC 原始 value/target 峰值从约 37 降至 17，MADDPG 从约 51 降至 24；
+MAPPO 两 seed 的持续高裁剪警报在组合组中未出现。2k 太短，不能证明长期漂移已消除。
+
+异常旧 checkpoint 的 critic-only 干预见 `audit_value_drift.py`。
+固定奖励标签可降低大 Q，说明并非完全无法拟合有限监督；移动 bootstrap 下 MAAC
+100 次局部更新的 Q 峰值约 176 万升至 455 万，同时 TD loss 下降。
+这直接说明 TD loss 下降不保证原始价值稳定，但只是一批数据的局部干预，
+不能排除状态外推、策略变化和超参数的共同影响。
 
 快速检查可缩短为：
 

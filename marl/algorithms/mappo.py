@@ -24,6 +24,7 @@ from marl.objectives import (
 from marl.returns import GAEConfig
 from marl.training.on_policy import PPOUpdateConfig, PreparedRollout, RolloutConfig
 from marl.training.optimization import OptimizerRuntime
+from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +32,7 @@ class MAPPOLossConfig:
     clip_ratio: float = 0.2
     value_coefficient: float = 0.5
     entropy_coefficient: float = 0.01
+    normalize_targets: bool = False
 
     def __post_init__(self) -> None:
         PPOClipObjective(self.clip_ratio)
@@ -74,6 +76,7 @@ class MAPPO(BaseMARLAlgorithm):
         self.policy_objective = PPOClipObjective(config.loss.clip_ratio)
         self.value_objective = ValueMSEObjective(config.loss.value_coefficient)
         self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
+        self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
 
     def _critic_input(self, batch: MARLBatch) -> Tensor:
         return batch.state if batch.state is not None else batch.observations.flatten(-2)
@@ -142,7 +145,7 @@ class MAPPO(BaseMARLAlgorithm):
             action_mask=batch.action_mask,
         )
         assert output.log_prob is not None and output.entropy is not None
-        return LossBundle.combine(
+        bundle = LossBundle.combine(
             (
                 self.policy_objective(
                     output.log_prob,
@@ -152,6 +155,9 @@ class MAPPO(BaseMARLAlgorithm):
                 self.entropy_objective(output.entropy),
             )
         )
+        return LossBundle(bundle.total, {
+            **bundle.terms, **agent_statistics("entropy", output.entropy),
+        })
 
     def compute_value_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。"""
@@ -160,19 +166,22 @@ class MAPPO(BaseMARLAlgorithm):
         values = self.critic(self._critic_input(batch))
         clip_ratio = self.config.update.value_clip_ratio
         if clip_ratio is None:
-            result = self.value_objective(values, batch.extras["returns"])
+            result = self.value_objective(
+                self.target_scale(values), self.target_scale(batch.extras["returns"])
+            )
         else:
             result = ClippedValueObjective(
                 self.value_objective.coefficient, clip_ratio
-            )(values, batch.extras["old_values"], batch.extras["returns"])
-        return LossBundle.combine((result,))
+            )(values, batch.extras["old_values"], batch.extras["returns"],
+              scale=self.target_scale.scale().to(values) if self.target_scale.enabled else None)
+        bundle = LossBundle.combine((result,))
+        return LossBundle(bundle.total, {
+            **bundle.terms, **value_diagnostics(values, batch.extras["returns"]),
+        })
 
     @staticmethod
     def _explained_variance(old_values: Tensor, returns: Tensor) -> Tensor:
-        return_variance = returns.var(unbiased=False)
-        if return_variance <= 1e-12:
-            return torch.zeros((), dtype=returns.dtype, device=returns.device)
-        return 1.0 - (returns - old_values).var(unbiased=False) / return_variance
+        return value_diagnostics(old_values, returns)["explained_variance"]
 
     def update(
         self, experience: PreparedRollout, runtime: OptimizerRuntime
@@ -180,6 +189,8 @@ class MAPPO(BaseMARLAlgorithm):
         """在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。"""
 
         device = next(self.parameters()).device
+        # 一份 fresh rollout 仅更新一次，所有 epoch 使用固定统计。
+        self.target_scale.update(experience.batch.extras["returns"])
         totals: dict[str, Tensor] = {}
         mini_batch_count = 0
         for mini_batch in experience.minibatches(
@@ -194,7 +205,7 @@ class MAPPO(BaseMARLAlgorithm):
                 runtime.max_grad_norm("actor"),
                 parameters=runtime.parameters("actor"),
             )
-            runtime.record_optimizer_step()
+            runtime.record_optimizer_step("actor", actor_gradient_norm)
             value_bundle = self.compute_value_loss_bundle(mini_batch)
             critic_gradient_norm = self.optimize(
                 runtime.optimizer("critic"),
@@ -202,7 +213,7 @@ class MAPPO(BaseMARLAlgorithm):
                 runtime.max_grad_norm("critic"),
                 parameters=runtime.parameters("critic"),
             )
-            runtime.record_optimizer_step()
+            runtime.record_optimizer_step("critic", critic_gradient_norm)
             metrics = {
                 **policy_bundle.terms,
                 **value_bundle.terms,
@@ -213,15 +224,19 @@ class MAPPO(BaseMARLAlgorithm):
                     actor_gradient_norm, critic_gradient_norm
                 ),
             }
-            for name, value in metrics.items():
-                totals[name] = totals.get(name, torch.zeros_like(value)) + value.detach()
+            runtime._accumulate(totals, {name: value.detach() for name, value in metrics.items()})
             mini_batch_count += 1
         if mini_batch_count == 0:
             raise RuntimeError("MAPPO update 未产生任何 mini-batch")
         runtime.finish()
-        averages = {name: value / mini_batch_count for name, value in totals.items()}
+        averages = runtime._averages(totals, mini_batch_count)
         batch = experience.batch
-        averages["explained_variance"] = self._explained_variance(
-            batch.extras["old_values"], batch.extras["returns"]
-        ).to(device)
+        averages.update({
+            f"rollout_{name}": value.to(device)
+            for name, value in value_diagnostics(
+                batch.extras["old_values"], batch.extras["returns"]
+            ).items()
+        })
+        if batch.rewards is not None:
+            averages.update(agent_statistics("reward", batch.rewards))
         return runtime.export_metrics(averages)

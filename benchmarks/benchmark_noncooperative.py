@@ -20,6 +20,7 @@ from typing import Any, cast
 
 import numpy as np
 import torch
+from scipy.stats import t as student_t  # type: ignore[import-untyped]
 
 from marl.algorithms import (
     MAACConfig,
@@ -29,9 +30,10 @@ from marl.algorithms import (
     QMIXConfig,
 )
 from marl.algorithms.base import BaseMARLAlgorithm
-from marl.algorithms.maac import MAACUpdateConfig
-from marl.algorithms.maddpg import MADDPGUpdateConfig
-from marl.algorithms.masac import MASACUpdateConfig
+from marl.algorithms.maac import MAACLossConfig, MAACUpdateConfig
+from marl.algorithms.maddpg import MADDPGLossConfig, MADDPGUpdateConfig
+from marl.algorithms.mappo import MAPPOLossConfig
+from marl.algorithms.masac import MASACLossConfig, MASACUpdateConfig
 from marl.config import AlgorithmConfig, config_to_dict
 from marl.envs import (
     ActionKind,
@@ -103,8 +105,17 @@ class BenchmarkSettings:
     horizon: int = 25
     replay_batch_size: int = 32
     hidden_dim: int = 64
-    eval_interval_steps: int = 1_000
+    eval_interval_steps: int | None = None
+    metrics_interval_steps: int | None = None
     target_environment_steps: int | None = None
+    layer_norm: bool = False
+    normalize_targets: bool = False
+    detailed_evaluation: bool = True
+    evaluation_seed: int = 1_000_000
+    health_value_limit: float = 10_000.
+    health_low_entropy_ratio: float = 0.01
+    health_clip_rate_limit: float = 0.95
+    health_warning_intervals: int = 3
 
     def __post_init__(self) -> None:
         required = (
@@ -114,23 +125,40 @@ class BenchmarkSettings:
             self.horizon,
             self.replay_batch_size,
             self.hidden_dim,
-            self.eval_interval_steps,
         )
         if any(value < 1 for value in required):
             raise ValueError("所有基准规模参数必须大于 0")
         if self.target_environment_steps is not None and self.target_environment_steps < 1:
             raise ValueError("target_environment_steps 必须大于 0 或为 None")
+        for name in ("eval_interval_steps", "metrics_interval_steps"):
+            value = getattr(self, name)
+            if value is not None and value < 1:
+                raise ValueError(f"{name} 必须大于 0 或为 None")
+
+    @property
+    def resolved_eval_interval_steps(self) -> int:
+        """默认约 100 个评估区间，向上对齐完整 rollout，短测试至少一轮。"""
+        if self.eval_interval_steps is not None:
+            return self.eval_interval_steps
+        quantum = self.num_envs * self.horizon
+        budget = self.target_environment_steps or self.train_episodes * quantum
+        return max(1, (budget + 100 * quantum - 1) // (100 * quantum)) * quantum
+
+    @property
+    def resolved_metrics_interval_steps(self) -> int:
+        return self.metrics_interval_steps or self.num_envs * self.horizon
 
 
 def _training_iterations(settings: BenchmarkSettings) -> int:
     """把精确环境步预算换算为完整向量 rollout/episode 次数。"""
 
     steps_per_iteration = settings.num_envs * settings.horizon
-    if settings.eval_interval_steps % steps_per_iteration:
-        raise ValueError(
-            "eval_interval_steps 必须能被 num_envs*horizon 整除，"
-            "以保证所有算法在同一环境步上评估"
-        )
+    for name, interval in (
+        ("eval_interval_steps", settings.resolved_eval_interval_steps),
+        ("metrics_interval_steps", settings.resolved_metrics_interval_steps),
+    ):
+        if interval % steps_per_iteration:
+            raise ValueError(f"{name} 必须能被 num_envs*horizon 整除")
     if settings.target_environment_steps is None:
         return settings.train_episodes
     quotient, remainder = divmod(settings.target_environment_steps, steps_per_iteration)
@@ -153,15 +181,19 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
     hidden = settings.hidden_dim
     if name == "maac":
         return MAACConfig(
-            policy=IndependentDiscreteConfig(hidden_dim=hidden),
-            critic=AttentionQConfig(hidden_dim=hidden, attention_heads=4),
+            policy=IndependentDiscreteConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            critic=AttentionQConfig(
+                hidden_dim=hidden, attention_heads=4, layer_norm=settings.layer_norm
+            ),
+            loss=MAACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
             update=MAACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "mappo":
         return MAPPOConfig(
-            policy=IndependentDiscreteConfig(hidden_dim=hidden),
-            critic=CentralizedValueConfig(hidden_dim=hidden),
+            policy=IndependentDiscreteConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            critic=CentralizedValueConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            loss=MAPPOLossConfig(normalize_targets=settings.normalize_targets),
             update=PPOUpdateConfig(
                 learning_rate=3e-4,
                 epochs=2,
@@ -171,15 +203,19 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
         )
     if name == "maddpg":
         return MADDPGConfig(
-            policy=IndependentDeterministicConfig(hidden_dim=hidden),
-            critic=IndependentQConfig(hidden_dim=hidden),
+            policy=IndependentDeterministicConfig(
+                hidden_dim=hidden, layer_norm=settings.layer_norm
+            ),
+            critic=IndependentQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            loss=MADDPGLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
             update=MADDPGUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "masac":
         return MASACConfig(
-            policy=IndependentGaussianConfig(hidden_dim=hidden),
-            critic=TwinQConfig(hidden_dim=hidden),
+            policy=IndependentGaussianConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            critic=TwinQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            loss=MASACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
             update=MASACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
@@ -235,10 +271,15 @@ def _evaluate(
     *,
     device: torch.device,
     seed: int,
+    deterministic: bool = True,
+    opponent: BaseMARLAlgorithm | None = None,
+    random_opponent: bool = False,
+    trained_role: str | None = None,
 ) -> tuple[list[str], list[list[float]]]:
     episode_returns: list[list[float]] = []
     agent_ids: list[str] | None = None
     for episode in range(settings.eval_episodes):
+        rng = np.random.default_rng(seed + 10_000 + episode)
         adapter = build_mpe2_simple_adversary(
             MPE2SimpleAdversaryConfig(horizon=settings.horizon),
             action_kind=action_kind,
@@ -253,8 +294,29 @@ def _evaluate(
                     step.observations,
                     step.action_mask,
                     device=device,
-                    deterministic=True,
+                    deterministic=deterministic,
                 )
+                if trained_role is not None:
+                    if random_opponent:
+                        if action_kind == ActionKind.DISCRETE:
+                            assert step.action_mask is not None
+                            other_actions = np.asarray([
+                                rng.choice(np.flatnonzero(mask)) for mask in step.action_mask
+                            ])
+                        else:
+                            other_actions = rng.uniform(
+                                -1., 1., size=actions.shape
+                            ).astype(np.float32)
+                    else:
+                        assert opponent is not None
+                        other_actions = _policy_actions(
+                            opponent, step.observations, step.action_mask,
+                            device=device, deterministic=deterministic,
+                        )
+                    if trained_role == "adversary":
+                        actions[1:] = other_actions[1:]
+                    else:
+                        actions[0] = other_actions[0]
                 step = adapter.step(actions)
                 returns += step.rewards
             episode_returns.append(returns.tolist())
@@ -343,16 +405,30 @@ def _metric_summary(rows: list[dict[str, float]]) -> dict[str, dict[str, float]]
     }
 
 
-def _mean_metrics(rows: list[dict[str, float]]) -> dict[str, float]:
+def _mean_metrics(
+    rows: list[dict[str, float]], weights: list[int] | None = None,
+) -> dict[str, float]:
     """汇总相邻两次评估之间的训练指标，供学习曲线和稳定性图使用。"""
 
     if not rows:
         return {}
     common = set.intersection(*(set(row) for row in rows))
-    return {
-        name: float(np.mean([row[name] for row in rows]))
-        for name in sorted(common)
-    }
+    result = {}
+    for name in sorted(common):
+        values = [row[name] for row in rows]
+        if name.endswith(("_abs_max", "_nonfinite")):
+            result[name] = float(max(values))
+        elif name.endswith("_count"):
+            result[name] = float(sum(values))
+        else:
+            result[name] = float(np.average(values, weights=weights))
+    for name in tuple(result):
+        if name.endswith("_clip_count"):
+            prefix = name.removesuffix("_clip_count")
+            result[f"{prefix}_gradient_clip_rate"] = (
+                result[name] / max(1, result[f"{prefix}_step_count"])
+            )
+    return result
 
 
 def _augment_metrics(
@@ -360,22 +436,68 @@ def _augment_metrics(
     config: AlgorithmConfig,
     action_dim: int,
 ) -> dict[str, float]:
-    """增加归一化熵与各 optimizer 的梯度裁剪事件。"""
+    """增加离散归一化熵，不把区间平均梯度冒充真实裁剪率。"""
 
     result = dict(metrics)
-    if "entropy" in result:
+    if "entropy" in result and config.algorithm in ("maac", "mappo"):
         result["entropy_ratio"] = result["entropy"] / float(np.log(action_dim))
-    update = config.update
-    for optimizer_name in ("actor", "critic", "temperature"):
-        norm_name = f"{optimizer_name}_gradient_norm"
-        if norm_name not in result:
-            continue
-        limit = getattr(update, f"resolved_{optimizer_name}_max_grad_norm", None)
-        if limit is not None:
-            result[f"{optimizer_name}_gradient_clipped"] = float(
-                result[norm_name] > float(limit)
-            )
+    del config
     return result
+
+
+def _record_training_checkpoint(
+    trainer: OffPolicyTrainer | OnPolicyTrainer,
+    config: AlgorithmConfig,
+    history: list[dict[str, Any]],
+    *,
+    environment_steps: int,
+    elapsed_seconds: float,
+    audit_path: Path | None = None,
+) -> None:
+    """一次同步记录真实训练区间；不运行额外前向或改变训练随机数。"""
+    previous_updates = history[-1]["updates"] if history else 0
+    spec = trainer.spec if isinstance(trainer, OffPolicyTrainer) else trainer.environment.spec
+    history.append({
+        "environment_steps": environment_steps,
+        "elapsed_seconds": elapsed_seconds,
+        "updates": trainer.optimization.update_count,
+        "optimizer_steps": trainer.optimization.optimizer_step_count,
+        "metric_weight": trainer.optimization.update_count - previous_updates,
+        "metrics": _augment_metrics(
+            trainer.optimization.flush_metrics(), config, spec.action_dim
+        ),
+    })
+    _write_audit_event(audit_path, "training", history[-1])
+    metrics = history[-1]["metrics"]
+    if any(not np.isfinite(value) for value in metrics.values()) or any(
+        value > 0 for key, value in metrics.items() if key.endswith("_nonfinite")
+    ):
+        raise FloatingPointError(f"非有限训练指标，已保留审计记录: {audit_path}")
+
+
+def _training_metric_mean(history: list[dict[str, Any]]) -> dict[str, float]:
+    measured = [point for point in history if point["metrics"] and point["metric_weight"]]
+    return _mean_metrics(
+        [point["metrics"] for point in measured],
+        [point["metric_weight"] for point in measured],
+    )
+
+
+def _audit_log_path(checkpoint_dir: Path | None, name: str, seed: int) -> Path | None:
+    if checkpoint_dir is None:
+        return None
+    directory = checkpoint_dir.parent / "diagnostics"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory / f"{name}_seed_{seed}.jsonl"
+
+
+def _write_audit_event(path: Path | None, kind: str, point: dict[str, Any]) -> None:
+    """每次采样后落盘一行；异常退出时仍保留此前真实审计记录。"""
+    if path is None:
+        return
+    mode = "w" if kind == "evaluation" and point["environment_steps"] == 0 else "a"
+    with path.open(mode, encoding="utf-8") as stream:
+        stream.write(json.dumps({"kind": kind, **point}, ensure_ascii=False) + "\n")
 
 
 def _checkpoint_metadata(
@@ -398,6 +520,9 @@ def _checkpoint_metadata(
     return {
         "path": str(checkpoint.resolve()),
         "sha256": digest.hexdigest(),
+        "audit_log_path": str(
+            (checkpoint_dir.parent / "diagnostics" / f"{name}_seed_{seed}.jsonl").resolve()
+        ),
         "config": config_to_dict(config),
         "environment": {
             "name": "mpe2.simple_adversary_v3",
@@ -427,7 +552,8 @@ def _evaluation_checkpoint(
     environment_steps: int,
     updates: int,
     elapsed_seconds: float,
-    metric_rows: list[dict[str, float]],
+    metric_rows: list[dict[str, Any]],
+    audit_path: Path | None = None,
 ) -> dict[str, Any]:
     """在固定评估种子上记录逐智能体回报和当前训练状态。"""
 
@@ -436,16 +562,44 @@ def _evaluation_checkpoint(
         action_kind,
         settings,
         device=device,
-        seed=seed,
+        seed=settings.evaluation_seed,
     )
+    # 随机评估、对手初始化不能消耗训练 RNG。共同场景种子与训练种子分离。
+    comparisons: dict[str, Any] = {}
+    if settings.detailed_evaluation:
+        devices = [device.index or 0] if device.type == "cuda" else []
+        with torch.random.fork_rng(devices=devices):
+            baseline_name = "mappo" if action_kind == ActionKind.DISCRETE else "masac"
+            torch.manual_seed(settings.evaluation_seed)
+            opponent = _algorithm_config(baseline_name, settings).build(algorithm.spec).to(device)
+            for mode in ("deterministic", "stochastic"):
+                deterministic = mode == "deterministic"
+                for source in ("random", "untrained"):
+                    for role in ("adversary", "good_team"):
+                        torch.manual_seed(settings.evaluation_seed + 1)
+                        _, samples = _evaluate(
+                            algorithm, action_kind, settings, device=device,
+                            seed=settings.evaluation_seed, deterministic=deterministic,
+                            opponent=opponent, random_opponent=source == "random",
+                            trained_role=role,
+                        )
+                        comparisons[f"{source}/{mode}/{role}"] = samples
+            torch.manual_seed(settings.evaluation_seed + 1)
+            _, samples = _evaluate(
+                algorithm, action_kind, settings, device=device,
+                seed=settings.evaluation_seed, deterministic=False,
+            )
+            comparisons["self_play/stochastic"] = samples
     values = np.asarray(evaluation_returns, dtype=np.float64)
-    return {
+    point = {
         "episode": episode,
         "environment_steps": environment_steps,
         "updates": updates,
         "elapsed_seconds": elapsed_seconds,
         "agent_ids": agent_ids,
         "evaluation_returns": evaluation_returns,
+        "fixed_opponent_evaluations": comparisons,
+        "evaluation_seed": settings.evaluation_seed,
         "mean_return_per_agent": values.mean(axis=0).tolist(),
         "std_return_per_agent": values.std(axis=0).tolist(),
         "mean_return_by_role": {
@@ -456,8 +610,10 @@ def _evaluation_checkpoint(
             "adversary": float(values[:, 0].std()),
             "good_team": float(values[:, 1:].std()),
         },
-        "mean_metrics_since_previous_evaluation": _mean_metrics(metric_rows),
+        "mean_metrics_since_previous_evaluation": _training_metric_mean(metric_rows),
     }
+    _write_audit_event(audit_path, "evaluation", point)
+    return point
 
 
 def _parameters_are_finite(algorithm: BaseMARLAlgorithm) -> bool:
@@ -471,7 +627,7 @@ def _seed_result(
     name: str,
     seed: int,
     algorithm: BaseMARLAlgorithm,
-    metrics: list[dict[str, float]],
+    training_history: list[dict[str, Any]],
     update_count: int,
     optimizer_step_count: int,
     action_kind: ActionKind,
@@ -482,10 +638,11 @@ def _seed_result(
     wall_clock_seconds: float,
     checkpoint: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    del action_kind, settings, device
+    del action_kind, device
     if not evaluation_history:
         raise RuntimeError("训练没有产生定期评估记录")
     final_evaluation = evaluation_history[-1]
+    metrics = [point["metrics"] for point in training_history if point["metrics"]]
     agent_ids = final_evaluation["agent_ids"]
     evaluation_returns = final_evaluation["evaluation_returns"]
     required = REQUIRED_METRICS[name]
@@ -529,27 +686,60 @@ def _seed_result(
             np.asarray(evaluation_returns), axis=0
         ).tolist(),
         "evaluation_history": evaluation_history,
+        "training_history": training_history,
+        "convergence_assessment": "not_established",
+        "audit_counts": {
+            "training_points": len(training_history),
+            "evaluation_points": len(evaluation_history),
+        },
         "environment_steps": environment_steps,
         "wall_clock_seconds": wall_clock_seconds,
         "updates_per_second": update_count / max(wall_clock_seconds, 1e-12),
         "gradient_clip_rate": {
-            name.removesuffix("_gradient_clipped"): float(
-                np.mean([row[name] for row in metrics if name in row])
-            )
-            for name in sorted(
-                {
-                    key
-                    for row in metrics
-                    for key in row
-                    if key.endswith("_gradient_clipped")
-                }
-            )
+            key.removesuffix("_gradient_clip_rate"): value
+            for key, value in _training_metric_mean(training_history).items()
+            if key.endswith("_gradient_clip_rate")
         },
+        "gradient_clip_rate_available": True,
+        "execution_complete": (
+            output_complete and environment_steps ==
+            _training_iterations(settings) * settings.num_envs * settings.horizon
+            and evaluation_history[0]["environment_steps"] == 0
+            and evaluation_history[-1]["environment_steps"] == environment_steps
+        ),
+        "numerics_finite": numerically_stable,
+        "optimization_health": _optimization_health(training_history, settings),
+        "learning_evaluation": {"convergence": "not_established"},
         "checkpoint": checkpoint,
         "parameters_finite": _parameters_are_finite(algorithm),
         "output_complete": output_complete,
         "numerically_stable": numerically_stable,
     }
+
+
+def _optimization_health(
+    history: list[dict[str, Any]], settings: BenchmarkSettings
+) -> dict[str, Any]:
+    """经验警报不是所有环境通用的理论边界；保留触发点与原始尺度。"""
+    warnings = []
+    streaks: dict[str, int] = {}
+    for point in history:
+        for key, value in point["metrics"].items():
+            if key.startswith(("value_", "target_", "q2_")) and key.endswith("_abs_max"):
+                if value > settings.health_value_limit:
+                    warnings.append({"step": point["environment_steps"],
+                                     "metric": key, "value": value,
+                                     "threshold": settings.health_value_limit})
+            low_entropy = key == "entropy_ratio" and value < settings.health_low_entropy_ratio
+            high_clip = (key.endswith("_gradient_clip_rate")
+                         and value > settings.health_clip_rate_limit)
+            streaks[key] = streaks.get(key, 0) + 1 if low_entropy or high_clip else 0
+            if streaks[key] == settings.health_warning_intervals:
+                warnings.append({"step": point["environment_steps"], "metric": key,
+                                 "value": value, "consecutive_intervals": streaks[key]})
+    return {"status": "warning" if warnings else "no_warning_detected",
+            "scale_warnings": warnings,
+            "note": "阈值为本基准经验警报；无警报不等于收敛或健康证明"}
 
 
 def _train_off_policy(
@@ -581,7 +771,8 @@ def _train_off_policy(
             raise TypeError(f"{name} 应使用 OffPolicyTrainer")
         trainer.optimization.sync_metrics = False
         collector = OffPolicyCollector(vector, experiment.algorithm, device=device)
-        metrics: list[dict[str, float]] = []
+        audit_path = _audit_log_path(checkpoint_dir, name, seed)
+        training_history: list[dict[str, Any]] = []
         evaluation_history: list[dict[str, Any]] = []
         metric_start = 0
         environment_steps = 0
@@ -597,11 +788,15 @@ def _train_off_policy(
                 updates=0,
                 elapsed_seconds=0.0,
                 metric_rows=[],
+                audit_path=audit_path,
             )
         )
         started = time.perf_counter()
         iterations = _training_iterations(settings)
-        next_evaluation_step = settings.eval_interval_steps
+        eval_interval = settings.resolved_eval_interval_steps
+        metrics_interval = settings.resolved_metrics_interval_steps
+        next_evaluation_step = eval_interval
+        next_metrics_step = metrics_interval
         for episode in range(iterations):
             seeds = [
                 seed + episode * settings.num_envs + environment_index
@@ -630,19 +825,20 @@ def _train_off_policy(
                     trainer.update()
                 environment_steps += len(transitions)
             completed_episode = episode + 1
-            if (
+            evaluate = (
                 environment_steps >= next_evaluation_step
                 or completed_episode == iterations
-            ):
-                interval_metrics = trainer.optimization.flush_metrics()
-                if interval_metrics:
-                    metrics.append(
-                        _augment_metrics(
-                            interval_metrics,
-                            config,
-                            vector.spec.action_dim,
-                        )
-                    )
+            )
+            if environment_steps >= next_metrics_step or evaluate:
+                _record_training_checkpoint(
+                    trainer, config, training_history,
+                    environment_steps=environment_steps,
+                    elapsed_seconds=time.perf_counter() - started,
+                    audit_path=audit_path,
+                )
+                while next_metrics_step <= environment_steps:
+                    next_metrics_step += metrics_interval
+            if evaluate:
                 evaluation_history.append(
                     _evaluation_checkpoint(
                         experiment.algorithm,
@@ -654,12 +850,13 @@ def _train_off_policy(
                         environment_steps=environment_steps,
                         updates=trainer.optimization.update_count,
                         elapsed_seconds=time.perf_counter() - started,
-                        metric_rows=metrics[metric_start:],
+                        metric_rows=training_history[metric_start:],
+                        audit_path=audit_path,
                     )
                 )
-                metric_start = len(metrics)
+                metric_start = len(training_history)
                 while next_evaluation_step <= environment_steps:
-                    next_evaluation_step += settings.eval_interval_steps
+                    next_evaluation_step += eval_interval
         checkpoint = _checkpoint_metadata(
             name,
             seed,
@@ -673,7 +870,7 @@ def _train_off_policy(
             name,
             seed,
             experiment.algorithm,
-            metrics,
+            training_history,
             trainer.optimization.update_count,
             trainer.optimization.optimizer_step_count,
             action_kind,
@@ -711,7 +908,8 @@ def _train_mappo(
         if not isinstance(trainer, OnPolicyTrainer):
             raise TypeError("MAPPO 应使用 OnPolicyTrainer")
         trainer.optimization.sync_metrics = False
-        metrics = []
+        audit_path = _audit_log_path(checkpoint_dir, "mappo", seed)
+        training_history: list[dict[str, Any]] = []
         evaluation_history: list[dict[str, Any]] = []
         metric_start = 0
         environment_steps = 0
@@ -727,11 +925,15 @@ def _train_mappo(
                 updates=0,
                 elapsed_seconds=0.0,
                 metric_rows=[],
+                audit_path=audit_path,
             )
         )
         started = time.perf_counter()
         iterations = _training_iterations(settings)
-        next_evaluation_step = settings.eval_interval_steps
+        eval_interval = settings.resolved_eval_interval_steps
+        metrics_interval = settings.resolved_metrics_interval_steps
+        next_evaluation_step = eval_interval
+        next_metrics_step = metrics_interval
         for episode in range(iterations):
             seeds = [
                 seed + episode * settings.num_envs + index
@@ -740,19 +942,20 @@ def _train_mappo(
             trainer.train_rollout(seeds)
             environment_steps += settings.num_envs * settings.horizon
             completed_episode = episode + 1
-            if (
+            evaluate = (
                 environment_steps >= next_evaluation_step
                 or completed_episode == iterations
-            ):
-                interval_metrics = trainer.optimization.flush_metrics()
-                if interval_metrics:
-                    metrics.append(
-                        _augment_metrics(
-                            interval_metrics,
-                            config,
-                            vector.spec.action_dim,
-                        )
-                    )
+            )
+            if environment_steps >= next_metrics_step or evaluate:
+                _record_training_checkpoint(
+                    trainer, config, training_history,
+                    environment_steps=environment_steps,
+                    elapsed_seconds=time.perf_counter() - started,
+                    audit_path=audit_path,
+                )
+                while next_metrics_step <= environment_steps:
+                    next_metrics_step += metrics_interval
+            if evaluate:
                 evaluation_history.append(
                     _evaluation_checkpoint(
                         experiment.algorithm,
@@ -764,12 +967,13 @@ def _train_mappo(
                         environment_steps=environment_steps,
                         updates=trainer.optimization.update_count,
                         elapsed_seconds=time.perf_counter() - started,
-                        metric_rows=metrics[metric_start:],
+                        metric_rows=training_history[metric_start:],
+                        audit_path=audit_path,
                     )
                 )
-                metric_start = len(metrics)
+                metric_start = len(training_history)
                 while next_evaluation_step <= environment_steps:
-                    next_evaluation_step += settings.eval_interval_steps
+                    next_evaluation_step += eval_interval
         checkpoint = _checkpoint_metadata(
             "mappo",
             seed,
@@ -783,7 +987,7 @@ def _train_mappo(
             "mappo",
             seed,
             experiment.algorithm,
-            metrics,
+            training_history,
             trainer.optimization.update_count,
             trainer.optimization.optimizer_step_count,
             ActionKind.DISCRETE,
@@ -852,7 +1056,8 @@ def _comparison_groups(results: list[dict[str, Any]]) -> dict[str, Any]:
                     "mean": float(values.mean()),
                     "std": float(values.std(ddof=1)) if len(values) > 1 else 0.0,
                     "ci95": (
-                        float(1.96 * values.std(ddof=1) / np.sqrt(len(values)))
+                        float(student_t.ppf(0.975, len(values) - 1)
+                              * values.std(ddof=1) / np.sqrt(len(values)))
                         if len(values) > 1
                         else 0.0
                     ),
@@ -1037,6 +1242,7 @@ def run_benchmark(
         )
 
     report = {
+        "report_schema_version": 2,
         "benchmark": "Farama MPE2 simple_adversary_v3",
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "device": str(device),
@@ -1045,6 +1251,12 @@ def run_benchmark(
             for package in ("gymnasium", "pettingzoo", "mpe2", "torch")
         },
         "settings": asdict(settings),
+        "audit_schedule": {
+            "eval_interval_steps": settings.resolved_eval_interval_steps,
+            "metrics_interval_steps": settings.resolved_metrics_interval_steps,
+            "metrics_weighting": "algorithm_update_count",
+            "gradient_clip_rate": "actual clipped optimizer steps / optimizer steps",
+        },
         "seeds": seeds,
         "stability_definition": (
             "completed updates with finite metrics, parameters and periodic per-agent "
@@ -1074,8 +1286,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--horizon", type=int, default=25)
     parser.add_argument("--replay-batch-size", type=int, default=32)
     parser.add_argument("--hidden-dim", type=int, default=64)
-    parser.add_argument("--eval-interval-steps", type=int, default=1_000)
+    parser.add_argument(
+        "--eval-interval-steps", type=int,
+        help="策略评估间隔；默认约 100 个区间，对齐完整 rollout",
+    )
+    parser.add_argument(
+        "--metrics-interval-steps", type=int,
+        help="训练诊断间隔；默认每个完整 rollout，不额外执行策略评估",
+    )
     parser.add_argument("--environment-steps", type=int)
+    parser.add_argument("--layer-norm", action="store_true")
+    parser.add_argument("--normalize-targets", action="store_true")
+    parser.add_argument("--torch-threads", type=int, default=1)
+    parser.add_argument("--basic-evaluation", action="store_true",
+                        help="仅自博弈评估；用于单独测量运行路径，不用于最终学习验收")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument(
         "--output",
@@ -1097,8 +1321,13 @@ def main() -> None:
         replay_batch_size=args.replay_batch_size,
         hidden_dim=args.hidden_dim,
         eval_interval_steps=args.eval_interval_steps,
+        metrics_interval_steps=args.metrics_interval_steps,
         target_environment_steps=args.environment_steps,
+        layer_norm=args.layer_norm,
+        normalize_targets=args.normalize_targets,
+        detailed_evaluation=not args.basic_evaluation,
     )
+    torch.set_num_threads(args.torch_threads)
     device = resolve_device(args.device)
     artifact_dir = args.artifact_dir or (
         args.output.parent / f"{args.output.stem}_artifacts"

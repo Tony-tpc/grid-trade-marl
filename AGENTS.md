@@ -20,8 +20,8 @@
    replay buffer 只用于允许重放旧经验的离策略算法。
 7. **公共配置是静态数据。** YAML 只能选择内置组件或显式传入 ExtensionCatalog 的外部组件，禁止从 YAML 动态导入
    Python 类。智能体数、观测维度、动作维度和 state 维度只从 `EnvironmentSpec` 注入。
-8. **小提交、全门禁。** 每个阶段必须独立可测试、可审查；不要把环境、算法、性能优化和
-   文档重写混在同一个提交中。
+8. **有实质进展再提交、完整验证。** 开发步骤与 Git 提交边界分开；形成可独立验证的完整
+   成果后再提交。同一目标所需的代码、配置、测试和文档一起提交，不按函数或小步骤拆分。
 
 ## 2. 修改前的论文审计
 
@@ -73,7 +73,8 @@
    增加 environment 和 `EnvironmentAdapter`，保持算法不变。
 6. **经验生命周期或更新顺序根本不同**
 
-   扩展经验缓冲/采样器或 `UpdatePlan`，必要时新增通用 trainer。
+   扩展经验缓冲/采样器；算法专用更新顺序放在具体算法的 `update()`，
+   复用 `BaseMARLAlgorithm.optimize()`，只有数据生命周期不同才新增通用 trainer。
 7. **以上仍无法表达一个独立算法**
 
    才新增直接继承 `BaseMARLAlgorithm` 的具体算法类。算法类负责组件装配和算法特有
@@ -87,7 +88,8 @@
 - GAE 改为 V-trace：新 return estimator。
 - 新能源市场规则：新 environment/adapter。
 - 离散动作改为论文定义的混合动作：action head、policy 和 adapter，不能只改动作维度。
-- 新算法需要 actor、critic 使用不同优化器并交替更新：新 UpdatePlan。
+- 新算法需要 actor、critic 使用不同优化器并交替更新：具体算法的 `update()` 接线；
+  不新增 UpdatePlan 或在 policy 中实现优化器循环。
 - 新算法的数据流与现有算法完全不同：新 trainer；仍应复用 batch、模型和目标组件。
 
 ## 4. 模块边界
@@ -235,7 +237,8 @@ seed、device、并行环境数和输出路径属于运行参数。
 3. 尺寸只来自 EnvironmentSpec；输出和损失分别复用 MARLModelOutput、LossBundle。
 4. 更新公共导出、AlgorithmConfig union、YAML 解析分支和必要的 experiment 类型声明。
 5. 现有离策略生命周期可直接复用 OffPolicyTrainer；新生命周期才新增 trainer。
-6. trainer 不按算法名称分支，不导入配置解析或目录；optimizer/epoch 不回到算法基类。
+6. trainer 不按算法名称分支，不导入配置解析或目录；算法基类只复用单次优化原语，
+   算法专用的 optimizer 顺序与 PPO epoch 在具体算法的 `update()` 中。
 7. 测试配置解析、固定张量公式、梯度边界、最小训练与 checkpoint 续训。
 8. 不复制已有 rollout/GAE/replay/update 实现。新机制优先新增组件和少量装配接线。
 
@@ -275,14 +278,22 @@ seed、device、并行环境数和输出路径属于运行参数。
 
 不要用长时间训练代替数学单测。训练曲线可用于最终验证，但不能证明公式实现正确。
 
-## 11. 每阶段质量门禁
+训练审计应区分高频训练诊断与独立策略评估，保留真实采样步数、原始指标及逐 seed 曲线。
+长基准不能只记录少量终局或十个粗粒度区间；评估频率与诊断频率应可配置，并记录实际
+采样覆盖率。提供回报、分离的 actor/critic 损失及滚动趋势图；不同量纲分轴展示。
+旧结果缺失的历史不得用插值或最终 checkpoint 重评估来冒充。曲线趋平、数值有限与
+策略收敛分别解释，不以此直接宣称达到博弈均衡。
 
-使用项目虚拟环境，在每个独立阶段执行：
+## 11. 开发验证与提交质量门禁
+
+开发中持续执行相关回归，测试阶段不强制对应 Git 提交。每个完整成果提交前使用项目
+虚拟环境执行完整门禁：
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --basetemp=.pytest_cache/refactor-tmp
 .\.venv\Scripts\python.exe -m ruff check marl examples tests
 .\.venv\Scripts\python.exe -m mypy marl examples tests
+.\.venv\Scripts\python.exe -m pip check
 git diff --check
 git status --short
 ```
@@ -300,12 +311,17 @@ git status --short
 - 通用代码是否出现论文名、特定数据集或特定环境分支；
 - 文档和示例是否与公共 API 同步。
 
-## 12. Git 与阶段拆分
+## 12. Git 提交与成果划分
 
 - 开始前先运行 `git status --short`，不要覆盖用户已有改动。
-- 一次提交只完成一个可描述的目标。
-- 推荐顺序：协议/数据结构 → 数学组件 → 训练链 → 算法迁移 → 示例/文档。
-- 每个阶段先测试、review，再提交；不要提交红测或“下一阶段再修”的半成品。
+- 只有形成明显进展、可独立验证的完整成果，且通过测试和审查后才提交。
+- 开发步骤不等于提交边界；不为单个函数、测试、配置接线或文档补充单独提交。
+- 同一目标所需的源码、配置、测试和说明合并提交，不合并无关目标。
+- 稳定性优化和运行速度优化分别形成完整成果；各部分内部可以分步骤开发和验证。
+- 不提交红测或“下一阶段再修”的半成品，也不将每个测试阶段机械拆成一次提交。
+- commit 标题与正文使用中文：标题明确主要改进，正文详细列出代码改动、解决的问题、
+  实际验证结果和兼容性影响。禁止仅写“优化代码”“修复问题”等笼统说明。
+- 提交说明只描述已完成并验证的改动，不把计划或未完成实验写成成果。
 - 不提交缓存、训练产物、临时 PDF、可视化、checkpoint 或本地虚拟环境。
 - 未经明确要求不要推送远端。
 

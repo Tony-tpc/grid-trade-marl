@@ -28,6 +28,7 @@ from marl.training.off_policy import (
     TemperatureActorCriticUpdateConfig,
 )
 from marl.training.optimization import OptimizerRuntime
+from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,7 @@ class MASACUpdateConfig(TemperatureActorCriticUpdateConfig):
 @dataclass(frozen=True, slots=True)
 class MASACLossConfig:
     td_coefficient: float = 1.0
+    normalize_targets: bool = False
     initial_alpha: float = 0.2
     target_entropy: float | None = None
 
@@ -81,6 +83,7 @@ class MASAC(BaseMARLAlgorithm):
         self.critics = config.critic.build(spec)
         self.target_critics = frozen_target(self.critics)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
         self.entropy_objective = SACEntropyObjective(
             spec.num_agents, spec.action_dim,
             initial_alpha=config.loss.initial_alpha, target_entropy=config.loss.target_entropy,
@@ -115,7 +118,9 @@ class MASAC(BaseMARLAlgorithm):
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MASAC 训练需要 actions/rewards/next_observations")
 
-    def compute_critic_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+    def compute_critic_loss_bundle(
+        self, batch: MARLBatch, *, update_statistics: bool = False
+    ) -> LossBundle:
         """使用 replay 动作更新 twin centralized critics。"""
 
         self._validate_training_batch(batch)
@@ -138,14 +143,20 @@ class MASAC(BaseMARLAlgorithm):
             target_q = self.return_estimator.estimate(
                 batch.rewards, soft_next, terminated
             )
-        first_result = self.td_loss(q1, target_q)
-        second_result = self.td_loss(q2, target_q)
+        if update_statistics:
+            self.target_scale.update(target_q)
+        scaled_target = self.target_scale(target_q)
+        first_result = self.td_loss(self.target_scale(q1), scaled_target)
+        second_result = self.td_loss(self.target_scale(q2), scaled_target)
         critic_loss = first_result.loss + second_result.loss
         critic_result = ObjectiveResult(
             critic_loss,
             {"critic_loss": critic_loss.detach()},
         )
-        return LossBundle.combine((critic_result,))
+        bundle = LossBundle.combine((critic_result,))
+        return LossBundle(bundle.total, {**bundle.terms,
+            **value_diagnostics(q1, target_q), **agent_statistics("q2", q2),
+            **agent_statistics("reward", batch.rewards)})
 
     def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """固定 twin critics 与其他 actor 动作，更新当前策略。"""
@@ -174,6 +185,13 @@ class MASAC(BaseMARLAlgorithm):
             policy_output.log_prob, min_q
         )
         temperature_result = self.entropy_objective.temperature(policy_output.log_prob)
+        actor_result = ObjectiveResult(actor_result.loss, {**actor_result.metrics,
+            **agent_statistics("entropy", -policy_output.log_prob),
+            **agent_statistics("action_saturation",
+                (policy_output.actions.abs() >= 0.99).float().mean(-1))})
+        temperature_result = ObjectiveResult(temperature_result.loss, {
+            **temperature_result.metrics,
+            **agent_statistics("alpha", self.entropy_objective.alpha)})
         return actor_result, temperature_result
 
     def compute_temperature_loss_bundle(self, batch: MARLBatch) -> LossBundle:
@@ -189,14 +207,14 @@ class MASAC(BaseMARLAlgorithm):
 
         device = batch.observations.device
         with runtime.autocast(device):
-            critic = self.compute_critic_loss_bundle(batch)
+            critic = self.compute_critic_loss_bundle(batch, update_statistics=True)
         critic_norm = self.optimize(
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
             parameters=runtime.parameters("critic"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("critic", critic_norm)
         with runtime.autocast(device):
             actor = self.compute_actor_loss_bundle(batch)
         actor_norm = self.optimize(
@@ -205,7 +223,7 @@ class MASAC(BaseMARLAlgorithm):
             runtime.max_grad_norm("actor"),
             parameters=runtime.parameters("actor"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("actor", actor_norm)
         with runtime.autocast(device):
             temperature = self.compute_temperature_loss_bundle(batch)
         temperature_norm = self.optimize(
@@ -214,7 +232,7 @@ class MASAC(BaseMARLAlgorithm):
             runtime.max_grad_norm("temperature"),
             parameters=runtime.parameters("temperature"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("temperature", temperature_norm)
         runtime.finish(self.target_pairs())
         metrics = {**critic.terms, **actor.terms, **temperature.terms}
         metrics["loss"] = (

@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import torch
 
-TRAINER_CHECKPOINT_SCHEMA_VERSION = 2
+TRAINER_CHECKPOINT_SCHEMA_VERSION = 3
 
 
 def build_trainer_checkpoint_state(
@@ -34,7 +34,10 @@ def validate_trainer_checkpoint_state(
     """统一检查 checkpoint schema 与实验配置，禁止静默部分恢复。"""
 
     if state.get("schema_version") != TRAINER_CHECKPOINT_SCHEMA_VERSION:
-        raise ValueError("不兼容的 trainer checkpoint：旧 schema 缺少分离 optimizer 状态")
+        raise ValueError(
+            "不兼容的 trainer checkpoint：旧 schema 缺少新版统计语义；"
+            "可显式加载 algorithm 权重用于评估/诊断，不支持静默精确续训"
+        )
     expected = dict(config_data) if config_data is not None else None
     if state.get("config") != expected:
         raise ValueError("checkpoint config 与当前 trainer config 不一致")

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch
 from torch import Tensor, nn
-from torch.distributions import Categorical, Normal
+from torch.distributions import Categorical, Normal, TanhTransform
 
 
 @dataclass(slots=True)
@@ -134,7 +134,12 @@ class GaussianActionHead(BaseActionHead):
         raw_action = mean if deterministic else distribution.rsample()
         actions = torch.tanh(raw_action)
         # tanh 变量变换的 Jacobian 修正，保证 SAC 等算法的 log_prob 正确。
-        correction = torch.log(1.0 - actions.pow(2) + 1e-6)
+        # 使用 raw action 的稳定公式；饱和时 1-tanh(x)^2 会舍入为零。
+        correction = TanhTransform().log_abs_det_jacobian(raw_action, actions)
         log_prob = (distribution.log_prob(raw_action) - correction).sum(dim=-1)
-        entropy = distribution.entropy().sum(dim=-1)
-        return ActionHeadOutput(actions, log_prob, entropy, {"mean": mean, "log_std": log_std})
+        # squash 后没有解析熵；随机动作上的 -log_prob 是 Monte Carlo 估计。
+        # deterministic=True 时它只是该动作的 surprisal，不应当解释为熵。
+        return ActionHeadOutput(actions, log_prob, -log_prob, {
+            "mean": mean, "log_std": log_std,
+            "gaussian_entropy": distribution.entropy().sum(dim=-1),
+        })

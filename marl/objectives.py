@@ -123,16 +123,18 @@ class ClippedValueObjective:
             raise ValueError("value clip ratio 必须大于 0")
 
     def __call__(
-        self, values: Tensor, old_values: Tensor, returns: Tensor
+        self, values: Tensor, old_values: Tensor, returns: Tensor, *, scale: Tensor | None = None
     ) -> ObjectiveResult:
         if values.shape != returns.shape or old_values.shape != returns.shape:
             raise ValueError("values/old_values/returns 必须具有相同逐智能体形状")
         clipped = old_values + (values - old_values).clamp(
             -self.clip_ratio, self.clip_ratio
         )
-        raw_loss = torch.maximum(
+        errors = torch.maximum(
             (values - returns).pow(2), (clipped - returns).pow(2)
-        ).mean()
+        )
+        # clip_ratio 始终在原始 value 单位下应用，尺度仅改变误差权重。
+        raw_loss = (errors if scale is None else errors / scale.detach().square()).mean()
         clip_fraction = ((values - old_values).abs() > self.clip_ratio).float().mean()
         return ObjectiveResult(
             loss=self.coefficient * raw_loss,

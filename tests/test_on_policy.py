@@ -148,5 +148,5 @@ def test_mappo_update_reports_metrics_and_restores_optimizer_runtime() -> None:
     assert restored.optimizer("actor").param_groups[0]["lr"] == pytest.approx(0.01)
     assert restored.optimizer("critic").param_groups[0]["lr"] == pytest.approx(0.02)
 
-    with pytest.raises(ValueError, match="旧单 optimizer"):
+    with pytest.raises(ValueError, match="旧 schema"):
         restored.load_state_dict({"optimizer": {}, "update_count": 1})

@@ -4,14 +4,17 @@ schema_version: 1  # 必填；配置版本，只允许整数 1。
 algorithm: masac  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
+  layer_norm: false  # 可选；各隐藏层 LayerNorm，默认关闭。
   kind: independent_gaussian  # 可选；组件实现名称，默认值如本行。
   hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
 critic:
+  layer_norm: false  # 可选；critic 隐藏层 LayerNorm，默认关闭。
   kind: twin_independent_centralized_q  # 可选；组件实现名称，默认值如本行。
   hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
 
 loss:
+  normalize_targets: false  # 可选；逐智能体 target 运行尺度，保留原始 V/Q 单位。
   td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。
   initial_alpha: 0.2  # 可选；SAC 初始熵温度，必须 > 0。
   target_entropy: null  # 可选；null 使用 -action_dim，保持逐智能体温度。

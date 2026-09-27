@@ -35,6 +35,7 @@ from marl.training.off_policy import (
     ReplayConfig,
 )
 from marl.training.optimization import OptimizerRuntime
+from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,7 @@ class MADDPGUpdateConfig(ActorCriticUpdateConfig):
 @dataclass(frozen=True, slots=True)
 class MADDPGLossConfig:
     td_coefficient: float = 1.0
+    normalize_targets: bool = False
 
     def __post_init__(self) -> None:
         TDLossObjective(self.td_coefficient)
@@ -92,6 +94,7 @@ class MADDPG(BaseMARLAlgorithm):
         self.target_policy = frozen_target(self.policy)
         self.target_critics = frozen_target(self.critics)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)
+        self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
         self.policy_objective = DeterministicPolicyObjective()
         self.return_estimator: ValueTargetEstimator = config.value_target.build()
 
@@ -118,7 +121,9 @@ class MADDPG(BaseMARLAlgorithm):
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MADDPG 训练需要 actions/rewards/next_observations")
 
-    def compute_critic_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+    def compute_critic_loss_bundle(
+        self, batch: MARLBatch, *, update_statistics: bool = False
+    ) -> LossBundle:
         """使用 replay 联合动作更新全部独立 centralized critics。"""
 
         self._validate_training_batch(batch)
@@ -137,8 +142,13 @@ class MADDPG(BaseMARLAlgorithm):
             target_q = self.return_estimator.estimate(
                 batch.rewards, next_q, terminated
             )
-        critic_result = self.td_loss(current_q, target_q)
-        return LossBundle.combine((critic_result,))
+        if update_statistics:
+            self.target_scale.update(target_q)
+        critic_result = self.td_loss(self.target_scale(current_q), self.target_scale(target_q))
+        bundle = LossBundle.combine((critic_result,))
+        return LossBundle(bundle.total, {**bundle.terms,
+            **value_diagnostics(current_q, target_q),
+            **agent_statistics("reward", batch.rewards)})
 
     def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """固定每个 Q_i 及其他 actor 动作，只更新对应 Actor_i。"""
@@ -170,14 +180,14 @@ class MADDPG(BaseMARLAlgorithm):
 
         device = batch.observations.device
         with runtime.autocast(device):
-            critic = self.compute_critic_loss_bundle(batch)
+            critic = self.compute_critic_loss_bundle(batch, update_statistics=True)
         critic_norm = self.optimize(
             runtime.optimizer("critic"),
             critic,
             runtime.max_grad_norm("critic"),
             parameters=runtime.parameters("critic"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("critic", critic_norm)
         with runtime.autocast(device):
             actor = self.compute_actor_loss_bundle(batch)
         actor_norm = self.optimize(
@@ -186,7 +196,7 @@ class MADDPG(BaseMARLAlgorithm):
             runtime.max_grad_norm("actor"),
             parameters=runtime.parameters("actor"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("actor", actor_norm)
         runtime.finish(self.target_pairs())
         metrics = {**critic.terms, **actor.terms}
         metrics["loss"] = critic.total.detach() + actor.total.detach()
