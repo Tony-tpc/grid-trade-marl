@@ -6,7 +6,12 @@ from marl.models.base import BackboneOutput, BaseBackbone
 
 
 class TransformerBackbone(BaseBackbone):
-    """对智能体集合或时间序列建模的 Transformer encoder。"""
+    """输入 [B,L,O]（或无批次 [L,O]），输出同布局的 model_dim 维特征。
+
+    当前是双向 encoder，无位置编码/因果 mask；padding_mask=True 表示忽略位置，
+    与 action_mask=True 表示合法不同。适用于集合或已显式编码的序列，不能直接
+    把未来时间步送入它来实现因果策略，否则会泄漏未来信息。
+    """
 
     def __init__(
         self,

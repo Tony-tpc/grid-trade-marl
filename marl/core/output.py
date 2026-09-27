@@ -12,6 +12,10 @@ class MARLModelOutput:
 
     ``extras`` 用来容纳算法特有内容，例如 Q 值、attention 权重或 recurrent hidden
     state。公共训练流程无需知道这些字段的具体语义，具体算法仍能保留完全的扩展空间。
+
+    actions 为 [...,N] 或 [...,N,A]；log_prob/entropy/values 为 [...,N]。
+    与单智能体 ActionHeadOutput 的区别是本类已组装智能体维，且 value/logits
+    并非所有算法都具备。它是前向结果，不是可直接重放的 MARLBatch。
     """
 
     actions: Tensor

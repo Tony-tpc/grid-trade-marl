@@ -14,6 +14,10 @@ from marl.target_updates import TargetUpdate
 
 
 def metrics_to_float(metrics: Mapping[str, Tensor]) -> dict[str, float]:
+    """把 detached 标量一次性搬回 CPU；日志边界之外避免逐项 .item() 同步。"""
+
+    if not metrics:
+        return {}
     names = tuple(metrics)
     values = torch.stack(
         [metrics[name].detach().reshape(()) for name in names]
@@ -22,7 +26,12 @@ def metrics_to_float(metrics: Mapping[str, Tensor]) -> dict[str, float]:
 
 
 class OptimizerRuntime:
-    """保存命名 optimizer 及其可恢复状态，但不决定算法更新顺序。"""
+    """保存 optimizer、设备端统计及恢复状态，不构图、不 backward、不编排更新。
+
+    optimizer 的参数集合在构造后必须保持不变；一个参数只能属于一个 optimizer。
+    ``update_count`` 计算法更新轮次，``optimizer_step_count`` 计真实 step 次数，
+    例如 PPO 一次 rollout 会包含多次 actor/critic step，二者不能互换。
+    """
 
     def __init__(
         self,
@@ -47,6 +56,18 @@ class OptimizerRuntime:
             )
             for name, optimizer in self.optimizers.items()
         }
+        owners: dict[int, str] = {}
+        for name, parameters in self._parameters.items():
+            if not parameters:
+                raise ValueError(f"optimizer {name} 没有参数")
+            for parameter in parameters:
+                if id(parameter) in owners:
+                    raise ValueError(
+                        f"optimizer 参数重复归属：{owners[id(parameter)]} 与 {name}"
+                    )
+                owners[id(parameter)] = name
+        if any(limit is not None and limit <= 0 for limit in max_grad_norms.values()):
+            raise ValueError("max_grad_norm 必须大于 0 或为 None")
         self.max_grad_norms = dict(max_grad_norms)
         self.amp_dtype = amp_dtype
         self.target_update = target_update
@@ -102,15 +123,36 @@ class OptimizerRuntime:
             f"{name}_gradient_abs_max": norm,
             f"{name}_gradient_nonfinite": (~torch.isfinite(norm)).float(),
         }
-        self._accumulate(self._step_metrics, events)
+        self.accumulate_metrics(self._step_metrics, events)
 
     @staticmethod
-    def _accumulate(destination: dict[str, Tensor], values: Mapping[str, Tensor]) -> None:
+    def accumulate_metrics(
+        destination: dict[str, Tensor], values: Mapping[str, Tensor], *, weight: int = 1
+    ) -> None:
+        """累加 detached 指标：普通均值按 weight 加权，事件数求和，峰值取最大。
+
+        PPO 的普通指标以 mini-batch 样本数为权重；梯度范数以 optimizer step 为
+        单位，需单独用默认 weight=1 累加。后缀 _count/_abs_max/_nonfinite 的
+        字段从不按样本数缩放，避免把一次裁剪误计成多次事件。
+        """
+
+        if weight < 1:
+            raise ValueError("metric weight 必须为正整数")
         # CUDA 上数十个 scalar add/max 会产生大量微小 kernel；合并为一次向量归约。
-        # CPU 仍保留简单循环。统计语义和舍入顺序不变，checkpoint 继续使用命名字段。
-        if values and next(iter(values.values())).is_cuda and len(values) > 8 and destination:
+        # 权重也在打包后应用，避免修正 PPO 日志时又引入逐指标 scalar multiply。
+        # CPU 保留简单循环；checkpoint 继续使用命名字段而不是打包存储格式。
+        if values and next(iter(values.values())).is_cuda and len(values) > 8:
             names = tuple(values)
-            incoming = torch.stack([values[name] for name in names])
+            incoming = torch.stack([values[name].detach() for name in names])
+            if weight != 1:
+                unweighted = torch.tensor(
+                    [name.endswith(("_count", "_abs_max", "_nonfinite")) for name in names],
+                    dtype=torch.bool, device=incoming.device,
+                )
+                incoming = torch.where(unweighted, incoming, incoming * weight)
+            if not destination:
+                destination.update(zip(names, incoming.unbind(), strict=True))
+                return
             packed_previous = torch.stack([
                 destination[name] if name in destination else torch.zeros_like(values[name])
                 for name in names
@@ -124,6 +166,9 @@ class OptimizerRuntime:
             destination.update(zip(names, combined.unbind(), strict=True))
             return
         for name, value in values.items():
+            value = value.detach()
+            if weight != 1 and not name.endswith(("_count", "_abs_max", "_nonfinite")):
+                value = value * weight
             previous = destination.get(name)
             if previous is None:
                 destination[name] = value
@@ -133,7 +178,11 @@ class OptimizerRuntime:
                 destination[name] = previous + value
 
     @staticmethod
-    def _averages(totals: Mapping[str, Tensor], count: int) -> dict[str, Tensor]:
+    def mean_metrics(totals: Mapping[str, Tensor], count: int) -> dict[str, Tensor]:
+        """除以累计权重；计数和极值保留原义，裁剪率由真实 step 事件计算。"""
+
+        if count < 1:
+            raise ValueError("metric count 必须为正整数")
         result = {
             name: value if name.endswith(("_count", "_abs_max", "_nonfinite")) else value / count
             for name, value in totals.items()
@@ -153,8 +202,8 @@ class OptimizerRuntime:
         detached.update(self._step_metrics)
         self._step_metrics = {}
         if self.sync_metrics:
-            return metrics_to_float(self._averages(detached, 1))
-        self._accumulate(self._metric_sums, detached)
+            return metrics_to_float(self.mean_metrics(detached, 1))
+        self.accumulate_metrics(self._metric_sums, detached)
         self._metric_count += 1
         return {}
 
@@ -163,7 +212,7 @@ class OptimizerRuntime:
 
         if self._metric_count == 0:
             return {}
-        means = self._averages(self._metric_sums, self._metric_count)
+        means = self.mean_metrics(self._metric_sums, self._metric_count)
         self._metric_sums.clear()
         self._metric_count = 0
         return metrics_to_float(means)

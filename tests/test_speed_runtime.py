@@ -106,10 +106,12 @@ def test_packed_cuda_metrics_match_cpu_sums_peaks_and_nonfinite_flags() -> None:
                        "value_nonfinite": torch.tensor(float(index == 2)),
                        "actor_step_count": torch.tensor(1.),
                        "actor_clip_count": torch.tensor(float(index % 2))})
-        OptimizerRuntime._accumulate(cpu, values)
-        OptimizerRuntime._accumulate(cuda, {key: value.cuda() for key, value in values.items()})
-    expected = OptimizerRuntime._averages(cpu, 5)
-    actual = OptimizerRuntime._averages(cuda, 5)
+        OptimizerRuntime.accumulate_metrics(cpu, values)
+        OptimizerRuntime.accumulate_metrics(
+            cuda, {key: value.cuda() for key, value in values.items()}
+        )
+    expected = OptimizerRuntime.mean_metrics(cpu, 5)
+    actual = OptimizerRuntime.mean_metrics(cuda, 5)
     for key, value in expected.items():
         torch.testing.assert_close(actual[key].cpu(), value, rtol=0, atol=0)
     assert actual["value_nonfinite"].item() == 1.

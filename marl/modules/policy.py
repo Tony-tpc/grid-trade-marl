@@ -27,6 +27,8 @@ from marl.modules.actor import Actor
 
 @runtime_checkable
 class PolicyTopology(Protocol):
+    """网络能力协议，不是算法基类；外部 nn.Module 可用结构化类型直接接入。"""
+
     def act(
         self, observations: Tensor, *, deterministic: bool = False,
         action_mask: Tensor | None = None,
@@ -198,7 +200,11 @@ class IndependentDiscretePolicy(nn.Module):
 
 
 class IndependentDeterministicPolicy(nn.Module):
-    """每个智能体拥有独立确定性连续 Actor 的策略拓扑。"""
+    """每个智能体拥有独立确定性 Actor；不把参数共享当作批处理优化。
+
+    act 与高斯拓扑的组装步骤相似，但动作分布、默认确定性和探索机制不同。
+    保留这段直观组装，不为少量堆叠代码另建策略基类或万能分布工厂。
+    """
 
     def __init__(
         self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,

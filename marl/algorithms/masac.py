@@ -32,11 +32,6 @@ from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
-class MASACUpdateConfig(TemperatureActorCriticUpdateConfig):
-    """MASAC 的 twin critic→actor→temperature 更新参数。"""
-
-
-@dataclass(frozen=True, slots=True)
 class MASACLossConfig:
     td_coefficient: float = 1.0
     normalize_targets: bool = False
@@ -60,7 +55,7 @@ class MASACConfig:
     loss: MASACLossConfig = MASACLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
-    update: MASACUpdateConfig = MASACUpdateConfig()
+    update: TemperatureActorCriticUpdateConfig = TemperatureActorCriticUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
@@ -75,6 +70,13 @@ class MASACConfig:
 
 
 class MASAC(BaseMARLAlgorithm):
+    """逐智能体双 Q 与可学习温度的连续动作算法。
+
+    critic 拟合各自的 soft TD target；actor 通过冻结 critic 对自己的动作求导；
+    temperature 只优化 log_alpha。三种 loss 共用公式但独立构图/更新，避免
+    诊断用的总 loss 被误当作单 optimizer 训练入口。
+    """
+
     def __init__(self, spec: EnvironmentSpec, config: MASACConfig) -> None:
         super().__init__(spec)
         config.validate(spec)

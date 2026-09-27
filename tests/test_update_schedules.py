@@ -8,12 +8,10 @@ import torch
 from torch import nn
 
 from marl.algorithms import MAAC, MADDPG, MASAC, MAACConfig, MADDPGConfig, MASACConfig
-from marl.algorithms.maac import MAACUpdateConfig
-from marl.algorithms.maddpg import MADDPGUpdateConfig
-from marl.algorithms.masac import MASACUpdateConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.experiment import build_experiment
+from marl.training.off_policy import ActorCriticUpdateConfig, TemperatureActorCriticUpdateConfig
 
 
 def _spec(kind: ActionKind) -> EnvironmentSpec:
@@ -94,15 +92,15 @@ def test_typed_update_configs_control_each_optimizer_and_step_count() -> None:
     cases = (
         replace(
             MAACConfig(),
-            update=MAACUpdateConfig(actor_learning_rate=1e-4, critic_learning_rate=2e-4),
+            update=ActorCriticUpdateConfig(actor_learning_rate=1e-4, critic_learning_rate=2e-4),
         ),
         replace(
             MADDPGConfig(),
-            update=MADDPGUpdateConfig(actor_learning_rate=1e-4, critic_learning_rate=2e-4),
+            update=ActorCriticUpdateConfig(actor_learning_rate=1e-4, critic_learning_rate=2e-4),
         ),
         replace(
             MASACConfig(),
-            update=MASACUpdateConfig(
+            update=TemperatureActorCriticUpdateConfig(
                 actor_learning_rate=1e-4,
                 critic_learning_rate=2e-4,
                 temperature_learning_rate=3e-4,

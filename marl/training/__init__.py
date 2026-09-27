@@ -7,6 +7,7 @@ from marl.training.off_policy import (
     OffPolicyTrainer,
     OffPolicyUpdateConfig,
     ReplayConfig,
+    TemperatureActorCriticUpdateConfig,
 )
 from marl.training.on_policy import (
     OnPolicyActorCritic,
@@ -30,4 +31,5 @@ __all__ = [
     "PreparedRollout",
     "ReplayConfig",
     "RolloutBuffer",
+    "TemperatureActorCriticUpdateConfig",
 ]

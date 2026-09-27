@@ -10,7 +10,7 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from marl.core import MARLBatch, MARLModelOutput
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
@@ -27,9 +27,7 @@ from marl.training.optimization import OptimizerRuntime
 
 
 class OnPolicyActorCritic(Protocol):
-    """采样器需要的 actor-critic 能力，不绑定具体算法名称。"""
-
-    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
+    """采集和更新所需的结构化能力；不实现公式，也不要求算法继承此协议。"""
 
     def sample(
         self,
@@ -84,9 +82,15 @@ def _index_batch(batch: MARLBatch, indices: Tensor) -> MARLBatch:
 
 
 class PreparedRollout:
-    """完成 GAE 后的一次性 on-policy 训练批次。"""
+    """完成 GAE 后的一次性训练凭据，batch 已展平为 [T*B,N,...]。
+
+    多 epoch 属于同一次消费；迁移设备会把消费权转交给返回对象。
+    不要手动用同一 batch 重新构造本类来重放已训练的 on-policy 数据。
+    """
 
     def __init__(self, batch: MARLBatch) -> None:
+        if batch.observations.ndim != 3 or batch.observations.shape[0] == 0:
+            raise ValueError("PreparedRollout 需要非空、已展平的 [T*B,N,O] 观测")
         self.batch = batch
         self._consumed = False
 
@@ -101,9 +105,13 @@ class PreparedRollout:
     def to(
         self, device: torch.device | str, *, non_blocking: bool = False
     ) -> PreparedRollout:
+        """移动数据并转交一次性消费权；传输失败时原对象仍可使用。"""
+
         if self._consumed:
             raise RuntimeError("已消费 rollout 不能再次迁移设备")
-        return PreparedRollout(self.batch.to(device, non_blocking=non_blocking))
+        moved = PreparedRollout(self.batch.to(device, non_blocking=non_blocking))
+        self._consumed = True
+        return moved
 
     def minibatches(
         self,

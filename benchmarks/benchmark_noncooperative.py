@@ -41,10 +41,10 @@ from marl.algorithms import (
     QMIXConfig,
 )
 from marl.algorithms.base import BaseMARLAlgorithm
-from marl.algorithms.maac import MAACLossConfig, MAACUpdateConfig
-from marl.algorithms.maddpg import MADDPGLossConfig, MADDPGUpdateConfig
+from marl.algorithms.maac import MAACLossConfig
+from marl.algorithms.maddpg import MADDPGLossConfig
 from marl.algorithms.mappo import MAPPOLossConfig
-from marl.algorithms.masac import MASACLossConfig, MASACUpdateConfig
+from marl.algorithms.masac import MASACLossConfig
 from marl.config import AlgorithmConfig, algorithm_config_from_dict, config_to_dict
 from marl.envs import (
     ActionKind,
@@ -65,7 +65,11 @@ from marl.modules.policy import (
 )
 from marl.runtime import SyncVectorEnv, resolve_device
 from marl.training import OffPolicyCollector, OffPolicyTrainer, OnPolicyTrainer
-from marl.training.off_policy import ReplayConfig
+from marl.training.off_policy import (
+    ActorCriticUpdateConfig,
+    ReplayConfig,
+    TemperatureActorCriticUpdateConfig,
+)
 from marl.training.on_policy import PPOUpdateConfig
 
 ALGORITHMS = ("maac", "mappo", "maddpg", "masac", "qmix")
@@ -207,7 +211,7 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
             ),
             loss=MAACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
-            update=MAACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
+            update=ActorCriticUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "mappo":
         return MAPPOConfig(
@@ -229,7 +233,7 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
             critic=IndependentQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
             loss=MADDPGLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
-            update=MADDPGUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
+            update=ActorCriticUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "masac":
         return MASACConfig(
@@ -237,7 +241,7 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
             critic=TwinQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
             loss=MASACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
-            update=MASACUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
+            update=TemperatureActorCriticUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "qmix":
         return QMIXConfig()

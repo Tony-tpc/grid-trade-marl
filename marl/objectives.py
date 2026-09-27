@@ -18,7 +18,7 @@ def _scalar(value: Tensor, name: str) -> Tensor:
 
 @dataclass(frozen=True, slots=True)
 class ObjectiveResult:
-    """一个目标对总损失的贡献及其只读监控指标。"""
+    """单个数学目标的 loss（带计算图）和标量监控指标（调用方应 detach）。"""
 
     loss: Tensor
     metrics: Mapping[str, Tensor] = field(default_factory=dict)
@@ -31,7 +31,11 @@ class ObjectiveResult:
 
 @dataclass(frozen=True, slots=True)
 class LossBundle:
-    """反向传播使用的总损失与命名指标。"""
+    """组合后的标量损失与命名指标；不拥有网络、optimizer 或执行顺序。
+
+    total 保留计算图供反向传播；terms 用于诊断，其中 loss 可能也带图。
+    日志出口由 OptimizerRuntime 统一 detach，避免长期保存训练图。
+    """
 
     total: Tensor
     terms: Mapping[str, Tensor]
@@ -187,7 +191,12 @@ class TDLossObjective:
 
 @dataclass(frozen=True, slots=True)
 class CounterfactualPolicyObjective:
-    """固定其他智能体动作的离散反事实策略目标。"""
+    """固定其他智能体动作，枚举当前智能体 A 个离散动作的反事实目标。
+
+    logits/q_values 为 [...,A]；baseline=sum_a pi(a)*Q(a)。概率权重和 Q 全部
+    detach，只对 log pi 求导，是 score-function 梯度，不对 baseline 反向求导。
+    baseline 抵消后标量 loss 可接近零，但梯度仍非零，不能据此判断停止学习。
+    """
 
     def __call__(self, logits: Tensor, q_values: Tensor) -> ObjectiveResult:
         if logits.shape != q_values.shape:
@@ -219,7 +228,11 @@ class DeterministicPolicyObjective:
 
 
 class SACEntropyObjective(nn.Module):
-    """逐智能体 SAC actor/temperature 目标及可训练 log alpha。"""
+    """逐智能体 SAC actor/temperature 目标，log_alpha 参数形状 [N]。
+
+    actor 将 alpha 视为常量；temperature 将策略 log_prob 视为常量。二者只能由
+    各自 optimizer 更新，目标熵默认 -A 是连续密度的约定，不是离散最大熵 log(A)。
+    """
 
     def __init__(
         self,

@@ -39,9 +39,12 @@ class QMixer(nn.Module):
         )
 
     def forward(self, agent_q_values: Tensor, state: Tensor) -> Tensor:
+        if agent_q_values.shape[:-1] != state.shape[:-1]:
+            raise ValueError("agent_q_values/state 的批次维必须一致，不能仅展平后大小相同")
         if agent_q_values.shape[-1] != self.num_agents or state.shape[-1] != self.state_dim:
             raise ValueError("agent_q_values/state 最后一维与 QMixer 配置不一致")
         leading = agent_q_values.shape[:-1]
+        # 仅合并样本维，不混合智能体；非负 mixing 权重保证逐体 Q 的单调性。
         flat_q = agent_q_values.reshape(-1, 1, self.num_agents)
         flat_state = state.reshape(-1, self.state_dim)
         w1 = self.hyper_w1(flat_state).abs().view(-1, self.num_agents, self.mixing_dim)

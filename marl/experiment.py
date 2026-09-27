@@ -29,6 +29,8 @@ OffConfig = MAACConfig | MADDPGConfig | MASACConfig | QMIXConfig
 
 @dataclass(frozen=True)
 class Experiment(Generic[A, T]):
+    """同一次装配得到的 config/algorithm/trainer；三者不再各自重复创建模型。"""
+
     config: AlgorithmConfig
     algorithm: A
     trainer: T
@@ -75,7 +77,11 @@ def build_experiment(
 ) -> (
     Experiment[BaseMARLAlgorithm, OnPolicyTrainer] | Experiment[BaseMARLAlgorithm, OffPolicyTrainer]
 ):
-    """先绑定 spec、构造网络并移动设备，再创建 optimizer。"""
+    """先绑定 spec、构造网络并移动设备，再创建 optimizer。
+
+    overload 仅用于静态类型推导，不是多套运行入口。内置类型的显式分支保留
+    各 optimizer 的参数归属；不再抽象成 registry、工厂链或 UpdatePlan。
+    """
     torch.manual_seed(seed)
     spec = environment if isinstance(environment, EnvironmentSpec) else environment.spec
     snapshot = config_to_dict(config)

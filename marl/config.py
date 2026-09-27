@@ -12,10 +12,10 @@ from typing import Any, Literal, TypeAlias, TypeVar, get_args, get_origin, get_t
 import torch
 import yaml  # type: ignore[import-untyped]
 
-from marl.algorithms.maac import MAACConfig, MAACLossConfig, MAACUpdateConfig
-from marl.algorithms.maddpg import MADDPGConfig, MADDPGLossConfig, MADDPGUpdateConfig
+from marl.algorithms.maac import MAACConfig, MAACLossConfig
+from marl.algorithms.maddpg import MADDPGConfig, MADDPGLossConfig
 from marl.algorithms.mappo import MAPPOConfig, MAPPOLossConfig
-from marl.algorithms.masac import MASACConfig, MASACLossConfig, MASACUpdateConfig
+from marl.algorithms.masac import MASACConfig, MASACLossConfig
 from marl.algorithms.qmix import QMIXConfig, QMIXLossConfig
 from marl.extensions import Buildable, Category, ExtensionCatalog, ExternalConfig
 from marl.modules.critic import (
@@ -40,7 +40,12 @@ from marl.modules.policy import (
 )
 from marl.returns import GAEConfig, TD0Config
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
-from marl.training.off_policy import OffPolicyUpdateConfig, ReplayConfig
+from marl.training.off_policy import (
+    ActorCriticUpdateConfig,
+    OffPolicyUpdateConfig,
+    ReplayConfig,
+    TemperatureActorCriticUpdateConfig,
+)
 from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
 
 AlgorithmConfig: TypeAlias = MAPPOConfig | MAACConfig | MADDPGConfig | MASACConfig | QMIXConfig
@@ -151,9 +156,9 @@ def algorithm_config_from_dict(
         raise ValueError("target_update.kind 必须是 soft 或 hard")
     # 两类 target 共用一个明确的 union；以下参数是离策略算法的公共配置。
     update_cls = {
-        "maac": MAACUpdateConfig,
-        "maddpg": MADDPGUpdateConfig,
-        "masac": MASACUpdateConfig,
+        "maac": ActorCriticUpdateConfig,
+        "maddpg": ActorCriticUpdateConfig,
+        "masac": TemperatureActorCriticUpdateConfig,
         "qmix": OffPolicyUpdateConfig,
     }[name]
     shared: dict[str, Any] = dict(

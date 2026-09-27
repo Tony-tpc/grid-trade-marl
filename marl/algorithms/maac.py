@@ -38,11 +38,6 @@ from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
-class MAACUpdateConfig(ActorCriticUpdateConfig):
-    """MAAC 的 critic→逐智能体 policy 更新参数。"""
-
-
-@dataclass(frozen=True, slots=True)
 class MAACLossConfig:
     td_coefficient: float = 1.0
     normalize_targets: bool = False
@@ -64,7 +59,7 @@ class MAACConfig:
     loss: MAACLossConfig = MAACLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
-    update: MAACUpdateConfig = MAACUpdateConfig()
+    update: ActorCriticUpdateConfig = ActorCriticUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 
@@ -79,6 +74,13 @@ class MAACConfig:
 
 
 class MAAC(BaseMARLAlgorithm):
+    """离散反事实 actor-critic；每个玩家保留自己的策略和 Q head。
+
+    ``compute_*_loss_bundle`` 只构图，``update`` 才决定 critic→各 actor→target。
+    policy loss 固定其他玩家动作，不通过 critic 回传；critic loss 使用 replay
+    中的真实联合动作。采集和 replay 生命周期仍由通用 trainer 管理。
+    """
+
     def __init__(self, spec: EnvironmentSpec, config: MAACConfig) -> None:
         super().__init__(spec)
         config.validate(spec)

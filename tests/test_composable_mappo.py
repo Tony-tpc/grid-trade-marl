@@ -174,6 +174,7 @@ def test_on_policy_trainer_runs_end_to_end_and_restores_checkpoint(
             parameter.add_(10.0)
     restored = build_experiment(environment, config, seed=8).trainer
     restored_algorithm = restored.algorithm
+    assert isinstance(restored_algorithm, MAPPO)
     restored.load_checkpoint(checkpoint)
     assert restored.optimization.update_count == 1
     assert restored.optimization.optimizer("actor").param_groups[0]["lr"] == pytest.approx(1e-3)

@@ -19,6 +19,8 @@ class BaseBackbone(nn.Module, ABC):
     """MLP/GRU/GNN/Transformer 的共同接口。
 
     Backbone 只做表示学习，不输出动作、Q 值或 loss，因此算法层可以独立替换网络。
+    这里统一的是特征输出，不保证不同 backbone 的输入布局可直接互换：GRU 需要
+    时间维，GNN 需要图结构，Transformer 的序列语义也必须由使用者显式指定。
     """
 
     def __init__(self, input_dim: int, output_dim: int) -> None:

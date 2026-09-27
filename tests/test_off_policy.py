@@ -8,7 +8,6 @@ import pytest
 import torch
 
 from marl.algorithms import MADDPG, MADDPGConfig
-from marl.algorithms.maddpg import MADDPGUpdateConfig
 from marl.core import MARLBatch
 from marl.envs import (
     ActionKind,
@@ -21,7 +20,7 @@ from marl.experiment import build_experiment
 from marl.modules.critic import IndependentQConfig
 from marl.modules.policy import IndependentDeterministicConfig
 from marl.target_updates import SoftTargetConfig
-from marl.training.off_policy import ReplayConfig
+from marl.training.off_policy import ActorCriticUpdateConfig, ReplayConfig
 
 
 def spec() -> EnvironmentSpec:
@@ -34,7 +33,7 @@ def training_config() -> MADDPGConfig:
         policy=IndependentDeterministicConfig(hidden_dim=16),
         critic=IndependentQConfig(hidden_dim=16),
         replay=ReplayConfig(capacity=4, batch_size=2),
-        update=MADDPGUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
+        update=ActorCriticUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
         target_update=SoftTargetConfig(tau=0.5),
     )
 
@@ -115,6 +114,7 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
     selected_config = training_config()
     trainer = build_experiment(spec(), selected_config, seed=8).trainer
     algorithm = trainer.algorithm
+    assert isinstance(algorithm, MADDPG)
     trainer.record(transition(1.0))
     trainer.record(transition(2.0))
     assert trainer.ready
@@ -125,6 +125,7 @@ def test_replay_and_trainer_checkpoint_resume_exact_state(tmp_path: Path) -> Non
 
     restored = build_experiment(spec(), selected_config, seed=8).trainer
     restored_algorithm = restored.algorithm
+    assert isinstance(restored_algorithm, MADDPG)
     restored.load_checkpoint(checkpoint)
     assert len(restored.replay) == 2
     assert restored.optimization.update_count == 1

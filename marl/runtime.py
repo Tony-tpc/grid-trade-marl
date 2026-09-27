@@ -1,7 +1,7 @@
-"""Device placement, vectorized environment adapters and replay storage.
+"""通用执行设施：设备选择、同步环境批次和 CPU 环形 replay。
 
-This layer consumes the public environment, batch and algorithm interfaces. It
-does not change the behavior or network layout of any particular algorithm.
+这里只处理数据存放/搬运，不构造 loss、不执行 optimizer，也不按算法名分支。
+环境仍在 CPU 上运行；把策略放到 CUDA 不会自动把环境动力学也迁移到 GPU。
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ from marl.envs.base import (
 
 
 def resolve_device(name: str = "auto") -> torch.device:
+    """auto 只检查 CUDA 可用性，不承诺 GPU 比 CPU 快；小网络需端到端计时。"""
+
     if name == "auto":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     device = torch.device(name)
@@ -68,7 +70,11 @@ def environment_steps_to_tensors(
 
 
 class SyncVectorEnv:
-    """Run multiple adapters together and present one policy inference batch."""
+    """多个 adapter 组成一次策略推理批次，step 仍在当前进程依次执行。
+
+    这不是多进程环境池，也不负责部分 reset。独立算法/seed 的多进程并发由基准
+    脚本的 spawn worker 管理；不要把 num_envs 误当作 CPU 核心数。
+    """
 
     def __init__(self, adapters: Sequence[EnvironmentAdapter]) -> None:
         if not adapters:
@@ -93,7 +99,12 @@ class SyncVectorEnv:
 
 
 class TensorReplayBuffer:
-    """Preallocated CPU ring buffer for fixed-shape environment transitions."""
+    """固定形状 CPU 环形存储；一次 transition 是所有智能体的联合经验。
+
+    size 表示已填充数量，position 指向下次写入槽；满容量后覆盖最旧数据。
+    同一个抽样索引用于所有字段，保持 (o,a,r,next_o) 和智能体维对齐。
+    pinned memory 只是加速 CPU→CUDA 传输，不会把 replay 常驻显存。
+    """
 
     def __init__(
         self, spec: EnvironmentSpec, capacity: int, *, pin_memory: bool = False

@@ -123,6 +123,34 @@ MAAC、MADDPG、MASAC、QMIX 使用 `OffPolicyTrainer`：trainer 持有 replay b
 
 ## 8. 当前基础版本的边界
 
+### 接口各自负责什么
+
+| 接口 | 所有者 | 是否修改训练状态 |
+|---|---|---|
+| `act` / MAPPO `sample` | 算法，委托 policy 前向 | 返回动作；sample 额外提供 rollout 所需 log-prob/value |
+| `compute_loss_bundle` | 算法 | 数学诊断，只构图；随机采样可能消耗 RNG，不执行更新 |
+| `compute_*_loss_bundle` | 算法 | 分离优化器需要的计算图；critic 的统计更新必须显式启用 |
+| `update` | 各具体算法 | 决定 loss、优化器顺序、epoch 和 target 时机 |
+| `optimize` | `BaseMARLAlgorithm` | 唯一通用 backward/clip/optimizer.step 实现 |
+| `OptimizerRuntime` | 通用训练运行状态 | 保存 optimizer/计数/指标；不定义训练算法 |
+| `train_rollout` / trainer `update` | trainer | 采集 fresh rollout 或抽取 replay，委派算法更新 |
+
+这些是同一条链路的不同职责，不是多套优化接口。能力 Protocol 只描述调用方实际
+需要的方法；具体算法不继承它们。`build_experiment` 的 overload 只是静态类型声明。
+
+MAAC/MADDPG 的 update 配置统一使用 `marl.training.ActorCriticUpdateConfig`；
+MASAC 使用 `TemperatureActorCriticUpdateConfig`；MAPPO 使用 `PPOUpdateConfig`，
+QMIX 使用 `OffPolicyUpdateConfig`。配置只保存静态参数，不重新引入 UpdatePlan。
+
+### 日志不是训练目标的收敛证明
+
+PPO 普通 loss/entropy/KL 按 mini-batch 样本数加权，梯度范数按 optimizer step
+平均，裁剪率来自逐次裁剪事件。`rollout_explained_variance*` 是整批 old value 与
+return 的更新前拟合诊断；训练 minibatch 的 EV/RMSE 平均不能当作整批统计。
+尾 batch 日志加权修正不改变反向传播或 optimizer step，也不会自动修复旧报告曲线。
+
+### 尚不能自动替换的能力
+
 这些实现用于提供清晰、可修改的算法核心。正式复现实验还需要根据论文和环境决定：
 
 - replay buffer 和采样比例；

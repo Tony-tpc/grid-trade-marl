@@ -10,7 +10,11 @@ from torch.distributions import Categorical, Normal, TanhTransform
 
 @dataclass(slots=True)
 class ActionHeadOutput:
-    """策略动作头的统一结果，支持离散和连续动作。"""
+    """单 actor 结果：离散 actions [...]，连续 actions [...,A]。
+
+    log_prob/entropy 均为 [...]，连续动作已对 A 求和；此处不创建智能体维，
+    policy 拓扑负责将多个 actor 的结果堆叠成 MARLModelOutput。
+    """
 
     actions: Tensor
     log_prob: Tensor
@@ -89,7 +93,11 @@ class DiscreteActionHead(BaseActionHead):
 
 
 class DeterministicActionHead(BaseActionHead):
-    """MADDPG/TD3 使用的确定性连续动作头。"""
+    """确定性连续动作头；探索噪声由 collector 添加，不混入网络定义。
+
+    返回的零 log_prob/entropy 仅为统一结果的占位值，不是真实概率密度，
+    不能用于 PPO 概率比或 SAC 熵项。evaluate_actions 因而保持显式不支持。
+    """
 
     def __init__(self, feature_dim: int, action_dim: int) -> None:
         super().__init__()
@@ -109,7 +117,11 @@ class DeterministicActionHead(BaseActionHead):
 
 
 class GaussianActionHead(BaseActionHead):
-    """连续动作的对角高斯头；tanh 将环境动作限制在 [-1, 1]。"""
+    """对角高斯重参数化采样，再经 tanh 限制到 [-1,1]。
+
+    mean 依赖观测，log_std 是每个动作维共享于所有观测的可学习参数；不是
+    state-dependent std。当前只实现采样路径，不宣称支持连续 PPO 的固定动作评估。
+    """
 
     def __init__(
         self,

@@ -24,14 +24,12 @@ def frozen_target(module: ModuleT) -> ModuleT:
 
 
 @dataclass(frozen=True, slots=True)
-class NoTargetUpdate:
-    def step(self, pairs: Iterable[tuple[nn.Module, nn.Module]] = ()) -> None:
-        tuple(pairs)
-
-
-@dataclass(frozen=True, slots=True)
 class SoftTargetUpdate:
-    """每次更新后执行 Polyak 平均：target <- (1-tau)target + tau*online。"""
+    """参数执行 Polyak 平均，非参数 buffer（如 BN 统计）完整复制。
+
+    buffer 可以是整数计数器，不能统一执行 lerp。目标网络是否处于 eval 模式由
+    调用者决定；requires_grad=False 本身不会关闭 dropout 或 BN 统计更新。
+    """
 
     tau: float = 0.005
 
@@ -46,6 +44,10 @@ class SoftTargetUpdate:
                 target.parameters(), online.parameters(), strict=True
             ):
                 target_parameter.lerp_(online_parameter, self.tau)
+            for target_buffer, online_buffer in zip(
+                target.buffers(), online.buffers(), strict=True
+            ):
+                target_buffer.copy_(online_buffer)
 
 
 @dataclass(frozen=True, slots=True)

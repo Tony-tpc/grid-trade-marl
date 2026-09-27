@@ -7,7 +7,12 @@ from marl.models.base import BackboneOutput, BaseBackbone
 
 
 class GRUBackbone(BaseBackbone):
-    """部分可观测任务的循环骨干，输入形状为 ``[..., T, input_dim]``。"""
+    """输入 [...,T,input_dim]，输出 [...,T,hidden_dim] 的循环特征。
+
+    PyTorch hidden 使用 [num_layers,prod(前置批维),hidden_dim]，不是 [...,T,H]。
+    调用者负责 episode reset 时清空 hidden，并按连续序列采样；现有展平后随机
+    打乱的 PPO mini-batch 不会自动变成 recurrent PPO。
+    """
 
     def __init__(self, input_dim: int, hidden_dim: int = 128, num_layers: int = 1) -> None:
         super().__init__(input_dim, hidden_dim)

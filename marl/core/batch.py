@@ -70,13 +70,34 @@ class MARLBatch:
             raise ValueError(
                 f"期望 observation_dim={observation_dim}，实际为 {self.observations.shape[-1]}"
             )
-        if (
-            self.action_mask is not None
-            and self.action_mask.shape[:-1] != self.observations.shape[:-1]
+        # 只检查 shape 元数据，不对 GPU tensor 做 .item()/isfinite 等同步。
+        # 动作类别、合法范围和 extras 的数学含义仍由具体算法验证。
+        agent_shape = self.observations.shape[:-1]
+        leading_shape = self.observations.shape[:-2]
+        for name in ("rewards", "terminated", "truncated"):
+            value = getattr(self, name)
+            if value is not None and value.shape != agent_shape:
+                raise ValueError(f"{name} 必须具有逐智能体形状 {tuple(agent_shape)}")
+        if self.next_observations is not None and (
+            self.next_observations.shape != self.observations.shape
         ):
-            raise ValueError("action_mask 的前置维度必须与 observations 一致")
-        if self.rewards is not None:
-            self.terminal_flags()
+            raise ValueError("next_observations 必须与 observations 形状一致")
+        if self.actions is not None and not (
+            self.actions.shape == agent_shape
+            or (self.actions.ndim == self.observations.ndim
+                and self.actions.shape[:-1] == agent_shape)
+        ):
+            raise ValueError("actions 必须为 [...,N] 或 [...,N,A]")
+        for name in ("state", "next_state"):
+            value = getattr(self, name)
+            if value is not None and (
+                value.ndim != self.observations.ndim - 1 or value.shape[:-1] != leading_shape
+            ):
+                raise ValueError(f"{name} 的批次维必须与 observations 一致")
+        for name in ("action_mask", "next_action_mask"):
+            value = getattr(self, name)
+            if value is not None and value.shape[:-1] != agent_shape:
+                raise ValueError(f"{name} 的前置维度必须与 observations 一致")
 
     def to(self, device: torch.device | str, *, non_blocking: bool = False) -> MARLBatch:
         """返回移动到目标设备的新批次，不在原对象上做隐式修改。"""

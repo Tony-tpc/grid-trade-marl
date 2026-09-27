@@ -24,7 +24,8 @@ class EnergyTradingAdapter(EnvironmentAdapter):
     动作设计，因此提供两种显式编码：
 
     * discrete：把 EV/储能 {-1,0,1}、HVAC {0,0.5,1}、SA {0,1} 的笛卡尔积
-      编成 54 个离散选项，适合 MAAC/MAPPO/QMIX；这是动作量化近似。
+      编成 54 个离散选项，供 MAAC/MAPPO 使用；这是动作量化近似。
+      本环境保持个体奖励，因此 QMIX 即使支持离散动作，也不满足奖励兼容性。
     * continuous：使用长度为 4 的连续动作，前 3 维映射到物理功率，最后一维用
       阈值决定 SA 是否启动，适合 MADDPG/MASAC；阈值是离散化近似。
 

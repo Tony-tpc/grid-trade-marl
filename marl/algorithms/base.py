@@ -36,7 +36,11 @@ class BaseMARLAlgorithm(nn.Module, ABC):
 
     @abstractmethod
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
-        """构建算法计算图，但不执行 backward 或 optimizer step。"""
+        """数学诊断入口：只构图，不做 backward、step 或 target 统计更新。
+
+        actor/critic/temperature 的总和便于单测，但不代表它们能用一个 optimizer
+        同时训练。正常训练调用具体算法 update，再由它选择 typed loss 方法。
+        """
 
     def target_pairs(self) -> Iterable[tuple[nn.Module, nn.Module]]:
         """返回 `(target, online)` 模块对；无 target network 时为空。"""
@@ -56,6 +60,8 @@ class BaseMARLAlgorithm(nn.Module, ABC):
 
         ``drop_zero_gradients`` 用于逐智能体更新：把非目标网络产生的全零梯度恢复
         为 ``None``，避免 Adam 历史动量仍然修改这些参数。
+        此兜底会触发数值检查；内置 MAAC 的单 actor 前向已从计算图隔离其他 actor，
+        不需要兜底。参数列表由 runtime 缓存，不能包含其他 optimizer 的参数。
         """
 
         optimizer.zero_grad(set_to_none=True)

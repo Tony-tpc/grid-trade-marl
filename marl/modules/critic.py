@@ -64,7 +64,7 @@ class ValueCritic(nn.Module):
         self.value_head = nn.Linear(backbone.output_dim, 1)
 
     def forward(self, inputs: Tensor, **backbone_kwargs: Tensor) -> Tensor:
-        features = self.backbone.forward(inputs, **backbone_kwargs).features
+        features = self.backbone(inputs, **backbone_kwargs).features
         values: Tensor = self.value_head(features).squeeze(-1)
         return values
 
@@ -79,20 +79,13 @@ class CentralizedCritic(nn.Module):
     def __init__(self, backbone: BaseBackbone, output_dim: int = 1) -> None:
         super().__init__()
         self.backbone = backbone
-        self.value_head = nn.Linear(backbone.output_dim, output_dim)  # 输出Q值
+        # 输入是 state 时可表示 V，输入含联合动作时可表示 Q；网络不猜测算法。
+        self.value_head = nn.Linear(backbone.output_dim, output_dim)
 
     def forward(self, centralized_input: Tensor, **backbone_kwargs: Tensor) -> Tensor:
-        """
-        centralized_input :
-            batch{
-                [o1,o2,o3,...,a1,a2,a3,...],
-                [o1,o2,o3,...,a1,a2,a3,...]
-                ...
-            }
+        """输入 [..., input_dim]，输出 [..., output_dim]，不压缩单输出维。"""
 
-        centralized_input -> backbone -> features -> value_head -> Q_value
-        """
-        features = self.backbone.forward(centralized_input, **backbone_kwargs).features
+        features = self.backbone(centralized_input, **backbone_kwargs).features
         values: Tensor = self.value_head(features)
         return values
 

@@ -127,6 +127,8 @@ class QMIX(BaseMARLAlgorithm):
                 chosen_next_q, batch.next_state
             ).squeeze(-1)
             reward = batch.rewards[..., 0]
+            # 先验证所有 r_i 相同后才取第一列；这不是把非合作奖励平均为团队奖励。
+            # 固定团队中任一成员真正终止即停止团队 bootstrap，截断仍保留 bootstrap。
             team_terminated = terminated.any(dim=-1)
             td_target = self.return_estimator.estimate(
                 reward, total_next_q, team_terminated
@@ -154,7 +156,7 @@ class QMIX(BaseMARLAlgorithm):
             runtime.max_grad_norm("value"),
             parameters=runtime.parameters("value"),
         )
-        runtime.record_optimizer_step()
+        runtime.record_optimizer_step("value", value_norm)
         runtime.finish(self.target_pairs())
         metrics = dict(bundle.terms)
         metrics["gradient_norm"] = value_norm

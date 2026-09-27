@@ -1,5 +1,6 @@
 """一般和博弈版 MADDPG：每个智能体优化自己的累计奖励。
-    replay_buffer: (ot​,at​,rt​,ot+1​,donet​) at+1由TD目标网络生成
+    replay 保存观测、联合动作、逐体奖励、下一观测及独立的终止/截断标记。
+    下一动作由 target actor 生成；只有真正终止阻止 TD bootstrap。
     一个 Agent 对应一个 Actor 、一个 Critic 
     Critic 是集中式的，读取所有智能体的观测和动作。
     Actor 是独立的，只读取各自智能体的观测。
@@ -39,11 +40,6 @@ from marl.value_scaling import TargetScale, agent_statistics, value_diagnostics
 
 
 @dataclass(frozen=True, slots=True)
-class MADDPGUpdateConfig(ActorCriticUpdateConfig):
-    """MADDPG 的 critic→actor 更新参数。"""
-
-
-@dataclass(frozen=True, slots=True)
 class MADDPGLossConfig:
     td_coefficient: float = 1.0
     normalize_targets: bool = False
@@ -63,7 +59,7 @@ class MADDPGConfig:
     loss: MADDPGLossConfig = MADDPGLossConfig()
     value_target: TD0Config = TD0Config()
     replay: ReplayConfig = ReplayConfig()
-    update: MADDPGUpdateConfig = MADDPGUpdateConfig()
+    update: ActorCriticUpdateConfig = ActorCriticUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 

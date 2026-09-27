@@ -10,6 +10,8 @@ class GNNBackbone(BaseBackbone):
     """零额外依赖的消息传递网络。
 
     输入 ``[..., N, input_dim]``；关键字参数 adjacency 为 ``[..., N, N]``。
+    图连接属于输入数据，不在此处假定通信规则。加入自环后按行归一化，用 PyTorch
+    matmul 聚合邻居，再拼接自身特征；这不是独立的多智能体训练算法。
     """
 
     def __init__(self, input_dim: int, hidden_dim: int = 128, num_layers: int = 2) -> None:

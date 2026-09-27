@@ -12,7 +12,7 @@ from torch import Tensor
 @dataclass(frozen=True, slots=True)
 class TD0Estimator:
     """逐智能体一步 Bellman target，只由 true termination 阻止 bootstrap。
-        y_t = r_t + gamma (1-done_t)V(s_{t+1})
+        y_t = r_t + gamma * (1-terminated_t) * V(s_{t+1})
     """
 
     gamma: float = 0.99
@@ -36,6 +36,10 @@ class GAEEstimator:
     输入第一维必须是时间 ``T``，其余批维保持不变。真实 termination 会阻止
     bootstrap；time-limit truncation 仍在当前 delta 中 bootstrap，但会停止 advantage
     向下一个 episode 递推。
+
+    当前采集器在 rollout 内不 reset：values[t+1] 必须是该 transition 的实际后继
+    value，末步使用 next_value。若将多个 episode 拼接（尤其截断后 reset），
+    需先扩展为逐 transition bootstrap value，不能直接传入 reset 后的 value。
     """
 
     gamma: float = 0.99
@@ -96,6 +100,7 @@ class GAEEstimator:
             advantages[index] = following_advantage
             following_value = values[index]
 
+        # value 的回归标签必须保留原始奖励单位，不能使用标准化后的 advantage。
         returns = advantages + values
         if self.normalize:
             raw_advantages = advantages

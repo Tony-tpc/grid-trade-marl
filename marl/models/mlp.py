@@ -8,7 +8,12 @@ from marl.models.base import BackboneOutput, BaseBackbone
 
 
 class MLPBackbone(BaseBackbone):
-    """适合向量观测的 MLP，自动保留所有 batch/agent 前置维。"""
+    """输入 [...,input_dim]，输出 [...,output_dim]，保留所有样本/智能体维。
+
+    hidden_dims 控制中间层，output_dim 控制最后的特征层；每层均接可选 LayerNorm
+    和 ReLU。内置 policy/critic Config.hidden_dim 传给 output_dim，并不会把默认
+    中间层 (128,128) 一起改小；要修改完整层宽，可直接构造本类或外部组件。
+    """
 
     def __init__(
         self,

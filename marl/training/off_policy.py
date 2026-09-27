@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,11 +10,10 @@ from typing import Any, Protocol, cast
 
 import numpy as np
 import torch
-from torch import Tensor, nn
+from torch import Tensor
 
 from marl.core import MARLBatch
 from marl.envs.base import EnvironmentSpec, Transition
-from marl.objectives import LossBundle
 from marl.runtime import (
     SyncVectorEnv,
     TensorReplayBuffer,
@@ -33,8 +32,6 @@ from marl.training.optimization import OptimizerRuntime
 class OffPolicyActor(Protocol):
     """批量 collector 所需的最小动作能力。"""
 
-    spec: EnvironmentSpec
-
     def act(
         self,
         observations: Tensor,
@@ -44,16 +41,14 @@ class OffPolicyActor(Protocol):
     ) -> Tensor: ...
 
 
-class OffPolicyAlgorithm(OffPolicyActor, Protocol):
-    """trainer 所需能力；更新顺序由具体算法的 ``update`` 定义。"""
+class OffPolicyAlgorithm(Protocol):
+    """trainer 实际调用的最小能力，不是供算法继承的第二层基类。
 
-    def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
-
-    def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle: ...
+    collector 单独依赖 OffPolicyActor；本协议不要求 act/parameters/target_pairs，
+    因为 trainer 不负责动作选择、公式或 optimizer 分配。
+    """
 
     def update(self, batch: MARLBatch, runtime: OptimizerRuntime) -> dict[str, float]: ...
-
-    def target_pairs(self) -> Iterable[tuple[nn.Module, nn.Module]]: ...
 
     def state_dict(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]: ...
 
@@ -74,6 +69,8 @@ class ReplayConfig:
 
 @dataclass(frozen=True, slots=True)
 class OffPolicyUpdateConfig:
+    """单 optimizer 的静态超参数；不包含更新循环或网络实例。"""
+
     learning_rate: float = 3e-4
     max_grad_norm: float | None = 10.0
     amp_dtype: torch.dtype | None = None
@@ -242,6 +239,8 @@ class OffPolicyTrainer:
         self.replay.record_many(transitions)
 
     def update(self) -> dict[str, float]:
+        """从 replay 抽取一批旧经验；只委派算法 update，不重复实现优化循环。"""
+
         if not self.ready:
             raise RuntimeError(
                 f"replay 样本不足：{len(self.replay)}/{self.replay_config.batch_size}"
@@ -252,6 +251,8 @@ class OffPolicyTrainer:
         return self.algorithm.update(batch, self.optimization)
 
     def update_batch(self, batch: MARLBatch) -> dict[str, float]:
+        """外部经验来源的入口：跳过 replay 抽样，但复用完全相同的算法 update。"""
+
         return self.algorithm.update(batch.to(self.device), self.optimization)
 
     def state_dict(self) -> dict[str, Any]:

@@ -65,7 +65,11 @@ class MAPPOConfig:
 
 
 class MAPPO(BaseMARLAlgorithm):
-    """只负责 MAPPO 前向语义的薄装配类。"""
+    """组合 PPO 目标并拥有 actor→critic 多 epoch 更新顺序。
+
+    trainer 只负责采集/GAE/checkpoint。act 只返回动作供环境执行，sample 额外
+    返回 old log-prob/value 供 rollout 保存；两者不是两套策略实现。
+    """
 
     def __init__(self, spec: EnvironmentSpec, config: MAPPOConfig) -> None:
         super().__init__(spec)
@@ -78,10 +82,9 @@ class MAPPO(BaseMARLAlgorithm):
         self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
         self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
 
-    def _critic_input(self, batch: MARLBatch) -> Tensor:
-        return batch.state if batch.state is not None else batch.observations.flatten(-2)
-
     def values(self, observations: Tensor, state: Tensor | None = None) -> Tensor:
+        """state [...,S] 优先，否则展平联合观测；输出始终保留 [...,N]。"""
+
         critic_input = state if state is not None else observations.flatten(-2)
         return self.critic(critic_input)
 
@@ -163,7 +166,7 @@ class MAPPO(BaseMARLAlgorithm):
         """只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。"""
 
         self._validate_training_batch(batch)
-        values = self.critic(self._critic_input(batch))
+        values = self.values(batch.observations, batch.state)
         clip_ratio = self.config.update.value_clip_ratio
         if clip_ratio is None:
             result = self.value_objective(
@@ -179,20 +182,21 @@ class MAPPO(BaseMARLAlgorithm):
             **bundle.terms, **value_diagnostics(values, batch.extras["returns"]),
         })
 
-    @staticmethod
-    def _explained_variance(old_values: Tensor, returns: Tensor) -> Tensor:
-        return value_diagnostics(old_values, returns)["explained_variance"]
-
     def update(
         self, experience: PreparedRollout, runtime: OptimizerRuntime
     ) -> dict[str, float]:
         """在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。"""
 
+        # 在修改 target 统计之前拒绝已消费对象，失败调用不能改变算法状态。
+        if experience.consumed:
+            raise RuntimeError("on-policy rollout 已消费，不能重复用于参数更新")
         device = next(self.parameters()).device
         # 一份 fresh rollout 仅更新一次，所有 epoch 使用固定统计。
         self.target_scale.update(experience.batch.extras["returns"])
         totals: dict[str, Tensor] = {}
+        gradient_totals: dict[str, Tensor] = {}
         mini_batch_count = 0
+        sample_count = 0
         for mini_batch in experience.minibatches(
             epochs=self.config.update.epochs,
             mini_batch_size=self.config.update.mini_batch_size,
@@ -218,19 +222,29 @@ class MAPPO(BaseMARLAlgorithm):
                 **policy_bundle.terms,
                 **value_bundle.terms,
                 "loss": policy_bundle.total.detach() + value_bundle.total.detach(),
+            }
+            gradient_metrics = {
                 "actor_gradient_norm": actor_gradient_norm,
                 "critic_gradient_norm": critic_gradient_norm,
                 "gradient_norm": torch.maximum(
                     actor_gradient_norm, critic_gradient_norm
                 ),
             }
-            runtime._accumulate(totals, {name: value.detach() for name, value in metrics.items()})
+            # 尾 batch 常比其余 batch 小，等权平均会夸大它对 loss/entropy/KL 的影响。
+            # 此处只修正日志权重；每个 mini-batch 的反向传播和 step 完全不变。
+            size = mini_batch.observations.shape[0]
+            runtime.accumulate_metrics(totals, metrics, weight=size)
+            runtime.accumulate_metrics(gradient_totals, gradient_metrics)
             mini_batch_count += 1
+            sample_count += size
         if mini_batch_count == 0:
             raise RuntimeError("MAPPO update 未产生任何 mini-batch")
         runtime.finish()
-        averages = runtime._averages(totals, mini_batch_count)
+        averages = runtime.mean_metrics(totals, sample_count)
+        averages.update(runtime.mean_metrics(gradient_totals, mini_batch_count))
         batch = experience.batch
+        # EV/RMSE 是非线性统计；训练 mini-batch 的均值不能当作整批拟合优度。
+        # rollout_* 从整批 old value/return 重新计算，衡量更新前的价值估计。
         averages.update({
             f"rollout_{name}": value.to(device)
             for name, value in value_diagnostics(

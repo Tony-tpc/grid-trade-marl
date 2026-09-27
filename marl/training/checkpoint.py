@@ -83,7 +83,11 @@ def save_checkpoint_state(state: Mapping[str, Any], path: str | Path) -> None:
 def load_checkpoint_state(
     path: str | Path, *, map_location: str | torch.device = "cpu"
 ) -> Mapping[str, Any]:
-    """加载 checkpoint，并在 trainer 读取字段前验证顶层协议。"""
+    """加载可信的本地 checkpoint，并在 trainer 读取字段前验证顶层协议。
+
+    包含 optimizer/NumPy RNG 的完整状态需要 weights_only=False；pickle 可执行
+    代码，因此不得用此函数加载不可信下载文件。加载模型权重不等于完整续训。
+    """
 
     state = torch.load(path, map_location=map_location, weights_only=False)
     if not isinstance(state, Mapping):

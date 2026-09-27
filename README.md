@@ -26,7 +26,7 @@
 .\.venv\Scripts\python.exe benchmarks\benchmark_noncooperative.py --device auto
 ```
 
-完整的三随机种子对比和五张性能图命令见
+多随机种子对比、密集审计和分组图表命令见
 [`benchmarks/README.md`](benchmarks/README.md)。生成的 JSON 和 PNG 均写入
 git 忽略的 `benchmark-results/`。
 
@@ -62,7 +62,7 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 
 | 位置 | 职责 | 通常何时修改 |
 |---|---|---|
-| `marl/algorithms/<algorithm>.py` | 算法 Config、loss 参数、组件装配及特有前向公式 | 调整一个算法的组成、增加 loss 接线 |
+| `marl/algorithms/<algorithm>.py` | 算法 Config、loss 参数、组件装配、公式及更新顺序 | 调整算法组成和更新生命周期 |
 | `marl/modules/policy.py` | 多智能体策略、参数共享关系、对应 Config | 更换策略拓扑 |
 | `marl/modules/actor.py` | 单智能体 backbone + action head，采样和动作评估 | 修改单智能体执行组合 |
 | `marl/modules/action_head.py` | 动作分布、mask、log-prob、entropy | 增加动作分布 |
@@ -88,6 +88,10 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 
 [算法概念与张量说明](marl/algorithms/README.md) ·
 [环境与 adapter 指南](marl/envs/README.md) · [后续开发约定](AGENTS.md)
+
+本轮接口、生命周期和扩展边界的审计结果见
+[代码审计与阅读说明](docs/code_audit_2026-09-27.md)。其中列出已清理接口、回归依据、
+Python 配置导入迁移及尚未支持的能力，不把工程测试通过解释成算法已收敛。
 
 ## 调参数与替换组件
 
