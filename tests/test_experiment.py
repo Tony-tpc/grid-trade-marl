@@ -16,6 +16,7 @@ from marl.config import algorithm_config_from_dict, config_to_dict, load_algorit
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.experiment import build_experiment
 from marl.extensions import ExtensionCatalog
+from marl.models import MLPBackboneConfig
 from marl.modules.policy import IndependentDiscretePolicy
 from marl.runtime import SyncVectorEnv
 from marl.training import OffPolicyTrainer, OnPolicyTrainer
@@ -49,7 +50,7 @@ def test_config_roundtrip_and_experiment(config, tmp_path):
 
 
 @pytest.mark.parametrize("change", [
-    {"schema_version": True}, {"schema_version": 1.1}, {"schema_version": 2},
+    {"schema_version": True}, {"schema_version": 1.1}, {"schema_version": 1},
     {"algorithm": "unknown"}, {"critic": {"hidden_dim": True}},
     {"critic": {"hidden_dim": -1}}, {"policy": {"observation_dim": 10}},
     {"policy": {"kind": "independent_gaussian"}},
@@ -57,7 +58,7 @@ def test_config_roundtrip_and_experiment(config, tmp_path):
     {"target_update": {"kind": "none"}},
 ])
 def test_yaml_rejects_invalid_config(change):
-    data = {"schema_version": 1, "algorithm": "mappo", **change}
+    data = {"schema_version": 2, "algorithm": "mappo", **change}
     with pytest.raises((ValueError, TypeError)):
         algorithm_config_from_dict(data)
 
@@ -79,7 +80,8 @@ class ExternalPolicy(nn.Module):
     def __init__(self, spec, settings):
         super().__init__()
         self.network = IndependentDiscretePolicy(
-            spec.num_agents, spec.observation_dim, spec.action_dim, settings.hidden_dim,
+            spec.num_agents, spec.observation_dim, spec.action_dim,
+            MLPBackboneConfig(output_dim=settings.hidden_dim),
         )
 
     def act(self, observations, *, deterministic=False, action_mask=None):
@@ -113,7 +115,7 @@ def test_catalog_builds_external_modules_once_and_restores(tmp_path):
     for category, builder in (("policy", policy), ("critic", critic)):
         catalog.register(category, "custom", parse, builder,
                          action_kinds=frozenset({ActionKind.DISCRETE}))
-    data = {"schema_version": 1, "algorithm": "mappo",
+    data = {"schema_version": 2, "algorithm": "mappo",
             "policy": {"kind": "custom", "hidden_dim": 8},
             "critic": {"kind": "custom", "hidden_dim": 8}}
     config = algorithm_config_from_dict(data, catalog=catalog)

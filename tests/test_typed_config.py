@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import CentralizedValueConfig
 from marl.modules.policy import IndependentDiscreteConfig, IndependentDiscretePolicy
 from marl.returns import GAEConfig, TD0Config
@@ -12,12 +13,12 @@ from marl.target_updates import HardTargetConfig, SoftTargetConfig
 def test_config_build_preserves_policy_parameters() -> None:
     spec = EnvironmentSpec(2, 3, 4, 6, ActionKind.DISCRETE, 8, RewardStructure.INDIVIDUAL)
     torch.manual_seed(123)
-    expected = IndependentDiscretePolicy(2, 3, 4, 16)
+    expected = IndependentDiscretePolicy(2, 3, 4, MLPBackboneConfig(output_dim=16))
     torch.manual_seed(123)
-    actual = IndependentDiscreteConfig(hidden_dim=16).build(spec)
+    actual = IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)).build(spec)
     for name, value in expected.state_dict().items():
         torch.testing.assert_close(actual.state_dict()[name], value)
-    assert CentralizedValueConfig(hidden_dim=16).build(spec)(
+    assert CentralizedValueConfig(backbone=MLPBackboneConfig(output_dim=16)).build(spec)(
         torch.zeros(5, 6)
     ).shape == (5, 2)
 
@@ -37,7 +38,7 @@ def test_return_configs_keep_distinct_interfaces() -> None:
 
 
 @pytest.mark.parametrize("make", [
-    lambda: IndependentDiscreteConfig(hidden_dim=0),
+    lambda: IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=0)),
     lambda: GAEConfig(gamma=1.1),
     lambda: TD0Config(gamma=-0.1),
     lambda: SoftTargetConfig(tau=0),

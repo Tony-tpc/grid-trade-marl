@@ -3,6 +3,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor, nn
 
+from marl.core.recurrent import RecurrentState
 from marl.models.base import BackboneOutput, BaseBackbone
 
 
@@ -23,9 +24,11 @@ class GNNBackbone(BaseBackbone):
         )
 
     def forward(
-        self, inputs: Tensor, hidden_state: Tensor | None = None, **kwargs: Tensor
+        self, inputs: Tensor, hidden_state: RecurrentState = None, **kwargs: Tensor
     ) -> BackboneOutput:
         self._validate_input(inputs)
+        if hidden_state is not None:
+            raise ValueError("无状态 backbone 不接受循环状态")
         adjacency = kwargs.get("adjacency")
         if adjacency is None:
             raise ValueError("GNNBackbone.forward 需要 adjacency=[..., N, N]")

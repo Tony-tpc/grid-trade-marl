@@ -10,9 +10,10 @@ from torch import Tensor
 
 from marl.algorithms.base import BaseMARLAlgorithm
 from marl.core import MARLBatch, MARLModelOutput
+from marl.core.recurrent import RecurrentState
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
-from marl.modules.critic import CentralizedValueConfig, ValueNetwork
+from marl.modules.critic import CentralizedValueConfig, RecurrentValueNetwork, ValueNetwork
 from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
 from marl.objectives import (
     ClippedValueObjective,
@@ -44,7 +45,7 @@ class MAPPOLossConfig:
 class MAPPOConfig:
     """MAPPO 配置；环境尺寸由 spec 注入。"""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     algorithm: Literal["mappo"] = "mappo"
     policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
     critic: Buildable[ValueNetwork] = CentralizedValueConfig()
@@ -53,9 +54,8 @@ class MAPPOConfig:
     rollout: RolloutConfig = RolloutConfig()
     update: PPOUpdateConfig = PPOUpdateConfig()
 
-
     def validate(self, spec: EnvironmentSpec) -> None:
-        if self.schema_version != 1 or self.algorithm != "mappo":
+        if self.schema_version != 2 or self.algorithm != "mappo":
             raise ValueError("MAPPO config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAPPO 不支持当前动作类型")
@@ -77,16 +77,47 @@ class MAPPO(BaseMARLAlgorithm):
         self.config = config
         self.policy = config.policy.build(spec)
         self.critic = config.critic.build(spec)
+        self.recurrent_policy = bool(getattr(self.policy, "is_recurrent", False))
+        self.recurrent_critic = (
+            isinstance(self.critic, RecurrentValueNetwork) and self.critic.is_recurrent
+        )
+        self.is_recurrent = self.recurrent_policy or self.recurrent_critic
+        length = config.update.sequence_length
+        horizon = config.rollout.horizon or spec.horizon
+        if not self.is_recurrent and length is not None:
+            raise ValueError("纯 MLP MAPPO 不接受 sequence_length")
+        if self.is_recurrent and not 1 <= (length or horizon) <= min(
+            horizon, config.update.mini_batch_size
+        ):
+            raise ValueError("sequence_length 必须在 [1,min(horizon,mini_batch_size)]")
         self.policy_objective = PPOClipObjective(config.loss.clip_ratio)
         self.value_objective = ValueMSEObjective(config.loss.value_coefficient)
         self.entropy_objective = EntropyObjective(config.loss.entropy_coefficient)
         self.target_scale = TargetScale(spec.num_agents, config.loss.normalize_targets)
 
-    def values(self, observations: Tensor, state: Tensor | None = None) -> Tensor:
-        """state [...,S] 优先，否则展平联合观测；输出始终保留 [...,N]。"""
-
+    def _values_with_state(
+        self,
+        observations: Tensor,
+        state: Tensor | None,
+        value_state: RecurrentState,
+    ) -> tuple[Tensor, RecurrentState]:
         critic_input = state if state is not None else observations.flatten(-2)
-        return self.critic(critic_input)
+        if self.recurrent_critic:
+            assert isinstance(self.critic, RecurrentValueNetwork)
+            return self.critic(critic_input, hidden_state=value_state, return_state=True)
+        if value_state is not None:
+            raise ValueError("无状态 critic 不接受 value_state")
+        return self.critic(critic_input), None
+
+    def values(
+        self,
+        observations: Tensor,
+        state: Tensor | None = None,
+        *,
+        value_state: RecurrentState = None,
+    ) -> Tensor:
+        """bootstrap 与 value loss 共用前向；不采样 actor，也不改变调用方状态。"""
+        return self._values_with_state(observations, state, value_state)[0]
 
     def sample(
         self,
@@ -95,13 +126,29 @@ class MAPPO(BaseMARLAlgorithm):
         *,
         deterministic: bool = False,
         action_mask: Tensor | None = None,
+        policy_state: RecurrentState = None,
+        value_state: RecurrentState = None,
     ) -> MARLModelOutput:
-        output = self.policy.act(
+        if self.recurrent_policy:
+            output = self.policy.act(
+                observations,
+                deterministic=deterministic,
+                action_mask=action_mask,
+                hidden_state=policy_state,
+            )
+        else:
+            if policy_state is not None:
+                raise ValueError("无状态 policy 不接受 policy_state")
+            output = self.policy.act(
+                observations,
+                deterministic=deterministic,
+                action_mask=action_mask,
+            )
+        output.values, output.value_state = self._values_with_state(
             observations,
-            deterministic=deterministic,
-            action_mask=action_mask,
+            state,
+            value_state,
         )
-        output.values = self.values(observations, state)
         return output
 
     def act(
@@ -112,6 +159,8 @@ class MAPPO(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
+        if self.recurrent_policy:
+            raise RuntimeError("循环 actor 请使用 sample() 并回传 policy_state，不能每步丢弃记忆")
         return self.policy.act(
             observations,
             deterministic=deterministic,
@@ -127,11 +176,17 @@ class MAPPO(BaseMARLAlgorithm):
 
     def _validate_training_batch(self, batch: MARLBatch) -> None:
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
+        if not self.recurrent_policy and batch.policy_state is not None:
+            raise ValueError("无状态 policy 不接受 batch.policy_state")
+        if not self.recurrent_critic and batch.value_state is not None:
+            raise ValueError("无状态 critic 不接受 batch.value_state")
         if batch.actions is None:
             raise ValueError("MAPPO 训练需要 actions")
         required = ("old_log_prob", "advantages", "returns")
         if any(name not in batch.extras for name in required):
             raise ValueError(f"MAPPO batch.extras 必须包含 {required}")
+        if self.is_recurrent and batch.observations.ndim != 4:
+            raise ValueError("循环 MAPPO 训练需要连续序列 [B,T,N,O]，不能随机打乱单步")
         expected_shape = batch.observations.shape[:-1]
         for name in required:
             if batch.extras[name].shape != expected_shape:
@@ -142,54 +197,83 @@ class MAPPO(BaseMARLAlgorithm):
 
         self._validate_training_batch(batch)
         assert batch.actions is not None
-        output = self.policy.evaluate(
-            batch.observations,
-            batch.actions,
-            action_mask=batch.action_mask,
-        )
+        if self.recurrent_policy:
+            output = self.policy.evaluate(
+                batch.observations,
+                batch.actions,
+                action_mask=batch.action_mask,
+                hidden_state=batch.policy_state,
+            )
+        else:
+            output = self.policy.evaluate(
+                batch.observations,
+                batch.actions,
+                action_mask=batch.action_mask,
+            )
         assert output.log_prob is not None and output.entropy is not None
+        log_prob, entropy = batch.valid(output.log_prob), batch.valid(output.entropy)
         bundle = LossBundle.combine(
             (
                 self.policy_objective(
-                    output.log_prob,
-                    batch.extras["old_log_prob"],
-                    batch.extras["advantages"],
+                    log_prob,
+                    batch.valid(batch.extras["old_log_prob"]),
+                    batch.valid(batch.extras["advantages"]),
                 ),
-                self.entropy_objective(output.entropy),
+                self.entropy_objective(entropy),
             )
         )
-        return LossBundle(bundle.total, {
-            **bundle.terms, **agent_statistics("entropy", output.entropy),
-        })
+        return LossBundle(
+            bundle.total,
+            {
+                **bundle.terms,
+                **agent_statistics("entropy", entropy),
+            },
+        )
 
     def compute_value_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。"""
 
         self._validate_training_batch(batch)
-        values = self.values(batch.observations, batch.state)
+        values = batch.valid(
+            self.values(
+                batch.observations,
+                batch.state,
+                value_state=batch.value_state,
+            )
+        )
+        returns = batch.valid(batch.extras["returns"])
         clip_ratio = self.config.update.value_clip_ratio
         if clip_ratio is None:
-            result = self.value_objective(
-                self.target_scale(values), self.target_scale(batch.extras["returns"])
-            )
+            result = self.value_objective(self.target_scale(values), self.target_scale(returns))
         else:
-            result = ClippedValueObjective(
-                self.value_objective.coefficient, clip_ratio
-            )(values, batch.extras["old_values"], batch.extras["returns"],
-              scale=self.target_scale.scale().to(values) if self.target_scale.enabled else None)
+            result = ClippedValueObjective(self.value_objective.coefficient, clip_ratio)(
+                values,
+                batch.valid(batch.extras["old_values"]),
+                returns,
+                scale=self.target_scale.scale().to(values) if self.target_scale.enabled else None,
+            )
         bundle = LossBundle.combine((result,))
-        return LossBundle(bundle.total, {
-            **bundle.terms, **value_diagnostics(values, batch.extras["returns"]),
-        })
+        return LossBundle(
+            bundle.total,
+            {
+                **bundle.terms,
+                **value_diagnostics(values, returns),
+            },
+        )
 
-    def update(
-        self, experience: PreparedRollout, runtime: OptimizerRuntime
-    ) -> dict[str, float]:
+    def update(self, experience: PreparedRollout, runtime: OptimizerRuntime) -> dict[str, float]:
         """在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。"""
 
         # 在修改 target 统计之前拒绝已消费对象，失败调用不能改变算法状态。
         if experience.consumed:
             raise RuntimeError("on-policy rollout 已消费，不能重复用于参数更新")
+        if experience.recurrent != self.is_recurrent:
+            raise ValueError("rollout 序列布局与当前网络不匹配")
+        experience.validate_minibatches(
+            self.config.update.mini_batch_size,
+            self.config.update.sequence_length,
+        )
+        self._validate_training_batch(experience.batch)
         device = next(self.parameters()).device
         # 一份 fresh rollout 仅更新一次，所有 epoch 使用固定统计。
         self.target_scale.update(experience.batch.extras["returns"])
@@ -201,6 +285,7 @@ class MAPPO(BaseMARLAlgorithm):
             epochs=self.config.update.epochs,
             mini_batch_size=self.config.update.mini_batch_size,
             generator=runtime.generator,
+            sequence_length=self.config.update.sequence_length,
         ):
             policy_bundle = self.compute_policy_loss_bundle(mini_batch)
             actor_gradient_norm = self.optimize(
@@ -226,13 +311,11 @@ class MAPPO(BaseMARLAlgorithm):
             gradient_metrics = {
                 "actor_gradient_norm": actor_gradient_norm,
                 "critic_gradient_norm": critic_gradient_norm,
-                "gradient_norm": torch.maximum(
-                    actor_gradient_norm, critic_gradient_norm
-                ),
+                "gradient_norm": torch.maximum(actor_gradient_norm, critic_gradient_norm),
             }
             # 尾 batch 常比其余 batch 小，等权平均会夸大它对 loss/entropy/KL 的影响。
             # 此处只修正日志权重；每个 mini-batch 的反向传播和 step 完全不变。
-            size = mini_batch.observations.shape[0]
+            size = mini_batch.valid_sample_count or mini_batch.observations.shape[0]
             runtime.accumulate_metrics(totals, metrics, weight=size)
             runtime.accumulate_metrics(gradient_totals, gradient_metrics)
             mini_batch_count += 1
@@ -245,12 +328,31 @@ class MAPPO(BaseMARLAlgorithm):
         batch = experience.batch
         # EV/RMSE 是非线性统计；训练 mini-batch 的均值不能当作整批拟合优度。
         # rollout_* 从整批 old value/return 重新计算，衡量更新前的价值估计。
-        averages.update({
-            f"rollout_{name}": value.to(device)
-            for name, value in value_diagnostics(
-                batch.extras["old_values"], batch.extras["returns"]
-            ).items()
-        })
+        averages.update(
+            {
+                f"rollout_{name}": value.to(device)
+                for name, value in value_diagnostics(
+                    batch.extras["old_values"], batch.extras["returns"]
+                ).items()
+            }
+        )
+        if experience.recurrent:
+            length = self.config.update.sequence_length or batch.observations.shape[1]
+            time = batch.observations.shape[1]
+            padded = ((time + length - 1) // length) * length * batch.observations.shape[0]
+            averages["padding_fraction"] = torch.tensor(
+                1 - experience.size / padded,
+                device=device,
+            )
+            for role, history in (
+                ("policy", experience.policy_history),
+                ("value", experience.value_history),
+            ):
+                if history is None:
+                    continue
+                states = history if isinstance(history, tuple) else (history,)
+                for label, tensor in zip(("hidden", "cell"), states, strict=False):
+                    averages[f"{role}_{label}_norm"] = tensor.detach().norm(dim=-1).mean()
         if batch.rewards is not None:
             averages.update(agent_statistics("reward", batch.rewards))
         return runtime.export_metrics(averages)

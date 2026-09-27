@@ -11,6 +11,13 @@
                       Algorithm + optimizer + Trainer
 ```
 
+## 可配置循环 MAPPO
+
+MAPPO 的 actor、critic 可分别选择 MLP、GRU 或 LSTM，使用同一个算法类和更新入口。
+包含序列 mini-batch、隐藏状态传递、padding 屏蔽与完整 rollout 边界 checkpoint。
+当前仍每个 rollout 重置环境，不支持中途部分 reset 或跨 rollout 续接。
+[网络配置、张量语义与实验验收](docs/recurrent_mappo.md)。
+
 ## 快速运行
 
 非合作博弈基准使用 Farama MPE2 的 `simple_adversary`，详见后文。
@@ -67,7 +74,7 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 | `marl/modules/actor.py` | 单智能体 backbone + action head，采样和动作评估 | 修改单智能体执行组合 |
 | `marl/modules/action_head.py` | 动作分布、mask、log-prob、entropy | 增加动作分布 |
 | `marl/modules/critic.py`、`mixer.py` | 价值网络与对应 Config | 更换 critic/mixer 网络 |
-| `marl/models/` | MLP、GRU、GNN、Transformer 表示学习 | 换 backbone |
+| `marl/models/` | MLP、GRU、LSTM、GNN、Transformer 表示学习 | 换 backbone |
 | `marl/objectives.py` | 纯数学目标与 `LossBundle` | 增加可复用目标函数 |
 | `marl/returns.py` | GAE、TD0 及配置、估计器能力协议 | 修改 advantage/target 估计 |
 | `marl/target_updates.py` | hard/soft target 更新及配置 | 修改目标网络同步 |
@@ -102,10 +109,11 @@ from dataclasses import replace
 from marl.algorithms import MAPPOConfig
 from marl.algorithms.mappo import MAPPOLossConfig
 from marl.modules.policy import IndependentDiscreteConfig
+from marl.models import MLPBackboneConfig
 from marl.training.on_policy import PPOUpdateConfig
 
 config = MAPPOConfig(
-    policy=IndependentDiscreteConfig(hidden_dim=64),
+    policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=64)),
     loss=MAPPOLossConfig(clip_ratio=0.1),
     update=PPOUpdateConfig(learning_rate=0.001, epochs=2),
 )
@@ -179,8 +187,9 @@ YAML 不能填写 Python 类路径，也不会触发动态导入或隐式全局�
 - terminated 阻止 bootstrap；truncated 保留当前 bootstrap，但停止跨 episode 的 GAE 递推。
 - shared reward 必须由环境明确声明；QMIX 不能用于一般和个体收益任务。
 
-内置 policy 当前是同构、固定智能体数的 MLP 网络。已有 GRU/GNN/Transformer backbone
-不代表序列缓冲、hidden state、混合动作或异构智能体的完整训练链已实现。
+内置 policy 是同构、固定智能体数；MAPPO 已支持 MLP/GRU/LSTM 的完整固定长度
+rollout 训练链。离策略循环 replay、跨 rollout 状态续接、GNN/Transformer 因果时序训练、
+混合动作与异构智能体仍不属于已实现能力。
 
 ## Checkpoint 与验证
 

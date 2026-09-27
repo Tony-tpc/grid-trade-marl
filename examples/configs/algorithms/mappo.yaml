@@ -1,17 +1,25 @@
 # MAPPO 完整默认配置；以下值与 Python MAPPOConfig() 一致。
 # 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
-schema_version: 1  # 必填；配置版本，只允许整数 1。
+# 更换循环网络时，整体替换对应 backbone：{kind: lstm, hidden_dim: 128, num_layers: 1}。
+# GRU 同理；不能保留 MLP 的 hidden_dims/output_dim/layer_norm 字段。
+schema_version: 2  # 必填；配置版本，只允许整数 2。
 algorithm: mappo  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
-  layer_norm: false  # 可选；各隐藏层 LayerNorm，默认关闭。
-  kind: independent_discrete  # 可选；组件实现名称，默认值如本行。
-  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
+  kind: independent_discrete
+  backbone:
+    kind: mlp  # MAPPO 可选 mlp/gru/lstm；MAAC 仅 mlp。
+    hidden_dims: [128, 128]  # MLP 中间层正整数列表。
+    output_dim: 128  # MLP 输出特征维度。
+    layer_norm: false  # MLP 各层归一化，默认关闭。
 
 critic:
-  layer_norm: false  # 可选；critic 隐藏层 LayerNorm，默认关闭。
-  kind: centralized_value  # 可选；组件实现名称，默认值如本行。
-  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
+  kind: centralized_value
+  backbone:
+    kind: mlp
+    hidden_dims: [128, 128]
+    output_dim: 128
+    layer_norm: false
 
 loss:
   normalize_targets: false  # 可选；逐智能体 target 运行尺度，保留原始 V/Q 单位。
@@ -34,8 +42,10 @@ update:
   actor_learning_rate: null  # 可选；null 回退 learning_rate。
   critic_learning_rate: null  # 可选；null 回退 learning_rate。
   epochs: 4  # 可选；每份 fresh rollout 的更新轮数，必须 >= 1。
-  mini_batch_size: 256  # 可选；展平 [T,B] 后的 mini-batch 大小，必须 >= 1。
+  mini_batch_size: 256  # 时间位置预算，不乘 N；循环每批 floor(预算/片段长度) 条片段。
   max_grad_norm: 10  # 可选；专用上限为 null 时的兼容默认值。
   actor_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
   critic_max_grad_norm: null  # 可选；null 回退 max_grad_norm。
   value_clip_ratio: null  # 可选；正数启用基于 old value 的 PPO value clipping。
+
+  sequence_length: null  # 仅循环网络：null 使用整段，正整数指定连续片段长度。

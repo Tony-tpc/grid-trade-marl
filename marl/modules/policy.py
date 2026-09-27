@@ -14,7 +14,9 @@ import torch
 from torch import Tensor, nn
 
 from marl.core import MARLModelOutput
+from marl.core.recurrent import RecurrentState, map_state, stack_states
 from marl.envs.base import EnvironmentSpec
+from marl.models import BackboneConfig, MLPBackboneConfig
 from marl.models.mlp import MLPBackbone
 from marl.modules.action_head import (
     ActionHeadOutput,
@@ -30,7 +32,10 @@ class PolicyTopology(Protocol):
     """网络能力协议，不是算法基类；外部 nn.Module 可用结构化类型直接接入。"""
 
     def act(
-        self, observations: Tensor, *, deterministic: bool = False,
+        self,
+        observations: Tensor,
+        *,
+        deterministic: bool = False,
         action_mask: Tensor | None = None,
     ) -> MARLModelOutput: ...
 
@@ -39,11 +44,24 @@ class PolicyTopology(Protocol):
 
 @runtime_checkable
 class DiscretePolicy(PolicyTopology, Protocol):
+    def act(
+        self,
+        observations: Tensor,
+        *,
+        deterministic: bool = False,
+        action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
+    ) -> MARLModelOutput: ...
+
     def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor: ...
 
     def evaluate(
-        self, observations: Tensor, actions: Tensor, *,
+        self,
+        observations: Tensor,
+        actions: Tensor,
+        *,
         action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
     ) -> MARLModelOutput: ...
 
 
@@ -84,24 +102,41 @@ class IndependentDiscretePolicy(nn.Module):
     """每个同构智能体拥有独立离散 Actor 的策略拓扑。"""
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
-        layer_norm: bool = False,
+        self,
+        num_agents: int,
+        observation_dim: int,
+        action_dim: int,
+        backbone: BackboneConfig | None = None,
     ) -> None:
         super().__init__()
+        backbone = backbone or MLPBackboneConfig()
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
-                DiscreteActionHead(hidden_dim, action_dim),
-            )
-            for _ in range(num_agents)
-        )
+        self.actors = nn.ModuleList()
+        for _ in range(num_agents):
+            network = backbone.build(observation_dim)
+            self.actors.append(Actor(network, DiscreteActionHead(network.output_dim, action_dim)))
+        self.is_recurrent = network.is_recurrent
 
-    def _validate(
-        self, observations: Tensor, action_mask: Tensor | None
-    ) -> None:
+    def initial_state(self, batch_size: int) -> RecurrentState:
+        states = []
+        for actor in self.actors:
+            assert isinstance(actor, Actor)
+            states.append(actor.backbone.initial_state(batch_size))
+        return stack_states(states, dim=2)
+
+    def _agent_state(self, state: RecurrentState, index: int, batch: int) -> RecurrentState:
+        def select(value: Tensor) -> Tensor:
+            if value.ndim != 4 or value.shape[1:3] != (batch, self.num_agents):
+                raise ValueError("policy_state 必须为 [K,B,N,H]")
+            return value[:, :, index, :].contiguous()
+
+        return map_state(state, select)
+
+    def _validate(self, observations: Tensor, action_mask: Tensor | None) -> None:
+        if self.is_recurrent and observations.ndim not in (3, 4):
+            raise ValueError("循环 policy 输入必须为 [B,N,O] 或 [B,T,N,O]")
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError(
                 "observations 末两维应为 "
@@ -123,10 +158,12 @@ class IndependentDiscretePolicy(nn.Module):
         logits = []
         for index, actor in enumerate(self.actors):
             assert isinstance(actor, Actor)
-            logits.append(actor.discrete_logits(
-                observations[..., index, :],
-                action_mask=self._mask_for(action_mask, index),
-            ))
+            logits.append(
+                actor.discrete_logits(
+                    observations[..., index, :],
+                    action_mask=self._mask_for(action_mask, index),
+                )
+            )
         return torch.stack(logits, dim=-2)
 
     def logits_for_agent(
@@ -153,6 +190,7 @@ class IndependentDiscretePolicy(nn.Module):
         *,
         deterministic: bool = False,
         action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
     ) -> MARLModelOutput:
         """对各 Actor 采样并返回 ``actions/log_prob/entropy`` 的逐智能体结果。"""
 
@@ -162,6 +200,7 @@ class IndependentDiscretePolicy(nn.Module):
                 observations[..., index, :],
                 deterministic=deterministic,
                 action_mask=self._mask_for(action_mask, index),
+                hidden_state=self._agent_state(hidden_state, index, observations.shape[0]),
             )
             for index, actor in enumerate(self.actors)
         ]
@@ -170,6 +209,7 @@ class IndependentDiscretePolicy(nn.Module):
             logits=_stack_parameter(outputs, "logits"),
             log_prob=_stack_scalar([output.log_prob for output in outputs]),
             entropy=_stack_scalar([output.entropy for output in outputs]),
+            policy_state=stack_states([output.hidden_state for output in outputs], dim=2),
         )
 
     def evaluate(
@@ -178,6 +218,7 @@ class IndependentDiscretePolicy(nn.Module):
         actions: Tensor,
         *,
         action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
     ) -> MARLModelOutput:
         """评估给定联合动作；不会重新采样。"""
 
@@ -187,15 +228,20 @@ class IndependentDiscretePolicy(nn.Module):
         outputs = []
         for index, actor in enumerate(self.actors):
             assert isinstance(actor, Actor)
-            outputs.append(actor.evaluate_actions(
-                observations[..., index, :], actions[..., index],
-                action_mask=self._mask_for(action_mask, index),
-            ))
+            outputs.append(
+                actor.evaluate_actions(
+                    observations[..., index, :],
+                    actions[..., index],
+                    action_mask=self._mask_for(action_mask, index),
+                    hidden_state=self._agent_state(hidden_state, index, observations.shape[0]),
+                )
+            )
         return MARLModelOutput(
             actions=_stack_scalar([output.actions for output in outputs]),
             logits=_stack_parameter(outputs, "logits"),
             log_prob=_stack_scalar([output.log_prob for output in outputs]),
             entropy=_stack_scalar([output.entropy for output in outputs]),
+            policy_state=stack_states([output.hidden_state for output in outputs], dim=2),
         )
 
 
@@ -207,7 +253,11 @@ class IndependentDeterministicPolicy(nn.Module):
     """
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
+        self,
+        num_agents: int,
+        observation_dim: int,
+        action_dim: int,
+        hidden_dim: int,
         layer_norm: bool = False,
     ) -> None:
         super().__init__()
@@ -234,9 +284,7 @@ class IndependentDeterministicPolicy(nn.Module):
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
         outputs = [
-            actor(
-                observations[..., index, :], deterministic=deterministic
-            )
+            actor(observations[..., index, :], deterministic=deterministic)
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
@@ -250,7 +298,11 @@ class IndependentGaussianPolicy(nn.Module):
     """每个智能体拥有独立 tanh-Gaussian Actor 的策略拓扑。"""
 
     def __init__(
-        self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int,
+        self,
+        num_agents: int,
+        observation_dim: int,
+        action_dim: int,
+        hidden_dim: int,
         layer_norm: bool = False,
     ) -> None:
         super().__init__()
@@ -277,9 +329,7 @@ class IndependentGaussianPolicy(nn.Module):
         if observations.shape[-2:] != (self.num_agents, self.observation_dim):
             raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
         outputs = [
-            actor(
-                observations[..., index, :], deterministic=deterministic
-            )
+            actor(observations[..., index, :], deterministic=deterministic)
             for index, actor in enumerate(self.actors)
         ]
         return MARLModelOutput(
@@ -317,25 +367,21 @@ class SharedDiscreteQPolicy(nn.Module):
         if action_mask is not None:
             if action_mask.shape != q_values.shape:
                 raise ValueError("action_mask 必须与离散 Q 值形状一致")
-            q_values = q_values.masked_fill(
-                ~action_mask.bool(), torch.finfo(q_values.dtype).min
-            )
+            q_values = q_values.masked_fill(~action_mask.bool(), torch.finfo(q_values.dtype).min)
         return MARLModelOutput(actions=q_values.argmax(dim=-1), logits=q_values)
+
 
 @dataclass(frozen=True, slots=True)
 class IndependentDiscreteConfig:
     kind: Literal["independent_discrete"] = "independent_discrete"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    backbone: BackboneConfig = MLPBackboneConfig()
 
     def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy:
         return IndependentDiscretePolicy(
-            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
-            self.layer_norm,
+            spec.num_agents,
+            spec.observation_dim,
+            spec.action_dim,
+            self.backbone,
         )
 
 
@@ -351,7 +397,10 @@ class IndependentDeterministicConfig:
 
     def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy:
         return IndependentDeterministicPolicy(
-            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+            spec.num_agents,
+            spec.observation_dim,
+            spec.action_dim,
+            self.hidden_dim,
             self.layer_norm,
         )
 
@@ -368,7 +417,10 @@ class IndependentGaussianConfig:
 
     def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy:
         return IndependentGaussianPolicy(
-            spec.num_agents, spec.observation_dim, spec.action_dim, self.hidden_dim,
+            spec.num_agents,
+            spec.observation_dim,
+            spec.action_dim,
+            self.hidden_dim,
             self.layer_norm,
         )
 
@@ -384,5 +436,7 @@ class SharedDiscreteQConfig:
 
     def build(self, spec: EnvironmentSpec) -> SharedDiscreteQPolicy:
         return SharedDiscreteQPolicy(
-            spec.observation_dim, spec.action_dim, self.hidden_dim,
+            spec.observation_dim,
+            spec.action_dim,
+            self.hidden_dim,
         )

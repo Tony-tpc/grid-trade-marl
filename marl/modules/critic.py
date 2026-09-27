@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, overload, runtime_checkable
 
 import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+from marl.core.recurrent import RecurrentState
 from marl.envs.base import EnvironmentSpec
+from marl.models import BackboneConfig, MLPBackboneConfig
 from marl.models.base import BaseBackbone
 from marl.models.mlp import MLPBackbone
 
@@ -29,6 +31,18 @@ def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor:
 class ValueNetwork(Protocol):
     def __call__(self, inputs: Tensor) -> Tensor: ...
     def parameters(self, recurse: bool = True) -> Iterator[nn.Parameter]: ...
+
+
+@runtime_checkable
+class RecurrentValueNetwork(Protocol):
+    """可选的状态返回能力；外部无状态 nn.Sequential 无需实现。"""
+
+    is_recurrent: bool
+
+    def __call__(
+        self, inputs: Tensor, *, hidden_state: RecurrentState = None,
+        return_state: Literal[True],
+    ) -> tuple[Tensor, RecurrentState]: ...
 
 
 @runtime_checkable
@@ -79,15 +93,39 @@ class CentralizedCritic(nn.Module):
     def __init__(self, backbone: BaseBackbone, output_dim: int = 1) -> None:
         super().__init__()
         self.backbone = backbone
+        self.is_recurrent = backbone.is_recurrent
         # 输入是 state 时可表示 V，输入含联合动作时可表示 Q；网络不猜测算法。
         self.value_head = nn.Linear(backbone.output_dim, output_dim)
 
-    def forward(self, centralized_input: Tensor, **backbone_kwargs: Tensor) -> Tensor:
-        """输入 [..., input_dim]，输出 [..., output_dim]，不压缩单输出维。"""
+    def initial_state(self, batch_size: int) -> RecurrentState:
+        return self.backbone.initial_state(batch_size)
 
-        features = self.backbone(centralized_input, **backbone_kwargs).features
-        values: Tensor = self.value_head(features)
-        return values
+    @overload
+    def forward(
+        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        return_state: Literal[False] = False,
+    ) -> Tensor: ...
+
+    @overload
+    def forward(
+        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        return_state: Literal[True],
+    ) -> tuple[Tensor, RecurrentState]: ...
+
+    def forward(
+        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        return_state: bool = False,
+    ) -> Tensor | tuple[Tensor, RecurrentState]:
+        """单步 [B,S] 或连续序列 [B,T,S]，value 最后一维始终保留 N。"""
+        single_step = self.is_recurrent and centralized_input.ndim == 2
+        encoded = self.backbone(
+            centralized_input.unsqueeze(1) if single_step else centralized_input,
+            hidden_state=hidden_state,
+        )
+        values: Tensor = self.value_head(encoded.features)
+        if single_step:
+            values = values.squeeze(1)
+        return (values, encoded.hidden_state) if return_state else values
 
 
 class IndependentCentralizedCritics(nn.Module):
@@ -231,16 +269,11 @@ class AttentionCritic(nn.Module):
 @dataclass(frozen=True, slots=True)
 class CentralizedValueConfig:
     kind: Literal["centralized_value"] = "centralized_value"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    backbone: BackboneConfig = MLPBackboneConfig()
 
     def build(self, spec: EnvironmentSpec) -> CentralizedCritic:
         return CentralizedCritic(
-            MLPBackbone(spec.state_dim, output_dim=self.hidden_dim, layer_norm=self.layer_norm),
+            self.backbone.build(spec.state_dim),
             output_dim=spec.num_agents,
         )
 

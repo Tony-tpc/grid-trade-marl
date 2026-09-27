@@ -28,6 +28,7 @@ from marl.envs import (
     transitions_to_batch,
 )
 from marl.experiment import build_experiment
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import AttentionQConfig
 from marl.modules.policy import IndependentDiscreteConfig
 from marl.training.off_policy import ReplayConfig
@@ -61,7 +62,7 @@ def test_energy_adapter_builds_config_algorithm_and_trainable_batch() -> None:
 
     algorithm_config = replace(
         MAACConfig(),
-        policy=IndependentDiscreteConfig(hidden_dim=16),
+        policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)),
         critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
         replay=ReplayConfig(capacity=8, batch_size=3),
     )

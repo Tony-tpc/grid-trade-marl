@@ -83,7 +83,8 @@
 ### 典型判断示例
 
 - PPO clip ratio 从 0.2 改为 0.1：配置。
-- MAPPO 换成 GRU policy：backbone/policy topology 组件 + 配置。
+- MAPPO 换成 GRU/LSTM policy：backbone/policy 配置 + 正确的状态传递与连续序列采样；
+  不得只替换网络层就宣称支持循环训练。
 - PPO 增加 value clipping：新 objective 组件 + 配置。
 - GAE 改为 V-trace：新 return estimator。
 - 新能源市场规则：新 environment/adapter。
@@ -98,7 +99,7 @@
 |---|---|---|
 | `marl/core/` | 跨算法数据协议：`MARLBatch`、`MARLModelOutput` | 论文公式、环境规则 |
 | `marl/envs/` | 环境、adapter、`EnvironmentSpec`、动作编解码 | optimizer、loss |
-| `marl/models/` | MLP/GRU/GNN/Transformer 等表示学习 backbone | 训练循环 |
+| `marl/models/` | MLP/GRU/LSTM/GNN/Transformer 等表示学习 backbone | 训练循环 |
 | `marl/modules/` | Actor、Policy 拓扑、Critic、Mixer、ActionHead | 环境结算规则、rollout 生命周期 |
 | `marl/objectives.py` | 可复用目标函数和 `LossBundle` | optimizer.step |
 | `marl/returns.py` | GAE、未来可扩展的 return estimator | 环境 reset |
@@ -224,7 +225,7 @@ checkpoint 接收 experiment 生成的配置数据快照；算法可以读取同
 环境使用独立的 `examples/configs/environments/<environment>.yaml`。
 seed、device、并行环境数和输出路径属于运行参数。
 
-算法 YAML 必填 `schema_version: 1` 和 `algorithm`；其余节与字段使用 Config 默认值。
+算法 YAML 必填 `schema_version: 2` 和 `algorithm`；其余节与字段使用 Config 默认值。
 网络使用 `kind + 直接字段`。MAPPO 使用 advantage/rollout，
 离策略算法使用 value_target/replay/target_update，QMIX 使用 mixer。
 不增加全算法通用的万能配置对象；不引入无意义的 target_update: none。
@@ -339,3 +340,14 @@ git status --short
 - pytest、Ruff、mypy、`git diff --check` 全部通过；
 - README、示例和公共导出已更新；
 - 工作树只包含本任务预期改动。
+
+### 循环 MAPPO 的额外契约
+
+- MLP/GRU/LSTM 共用 MAPPO，不新增算法别名、UpdatePlan 或 optimizer 循环。
+- LSTM 的 h/c 都必须保存；actor 和 critic 状态独立，采样保存处理当前观测之前的状态。
+- 循环 mini-batch 只打乱片段顺序，不打乱时间；padding 必须从 loss、统计与计数排除。
+- 在最终观测上、reset 之前计算截断 bootstrap；新 rollout 重置环境与状态。
+- 初态为采样策略的 detached 状态，片段内反传；第一版无 burn-in，必须披露此近似。
+- 评估/cross-play 必须持续传状态，来源之间互不串用，结束恢复原始 train/eval 模式。
+- checkpoint schema 4 只承诺完整 rollout 更新后的恢复；旧 schema 不静默部分恢复。
+- 循环能力应通过专用记忆任务验证；有限 loss 或曲线趋平不等于博弈收敛。

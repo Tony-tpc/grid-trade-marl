@@ -17,6 +17,7 @@ from marl.envs import (
     transitions_to_batch,
 )
 from marl.experiment import build_experiment
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import AttentionQConfig
 from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import SyncVectorEnv, TensorReplayBuffer
@@ -144,7 +145,7 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
     config = MAACConfig()
     config = replace(
         config,
-        policy=IndependentDiscreteConfig(hidden_dim=16),
+        policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)),
         critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
         replay=ReplayConfig(capacity=8, batch_size=4),
         update=ActorCriticUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),

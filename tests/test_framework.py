@@ -15,7 +15,13 @@ from marl.algorithms import (
 )
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
-from marl.models import GNNBackbone, GRUBackbone, MLPBackbone, TransformerBackbone
+from marl.models import (
+    GNNBackbone,
+    GRUBackbone,
+    MLPBackbone,
+    MLPBackboneConfig,
+    TransformerBackbone,
+)
 from marl.modules import (
     Actor,
     DiscreteActionHead,
@@ -58,7 +64,7 @@ def test_actor_and_mask() -> None:
 
 
 def test_independent_policy_only_stacks_actor_results() -> None:
-    policy = IndependentDiscretePolicy(2, 3, 4, 8)
+    policy = IndependentDiscretePolicy(2, 3, 4, MLPBackboneConfig(output_dim=8))
     observations = torch.randn(5, 2, 3)
     mask = torch.ones(5, 2, 4, dtype=torch.bool)
     mask[..., 1, 3] = False

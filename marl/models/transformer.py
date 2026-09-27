@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from torch import Tensor, nn
 
+from marl.core.recurrent import RecurrentState
 from marl.models.base import BackboneOutput, BaseBackbone
 
 
@@ -36,9 +37,11 @@ class TransformerBackbone(BaseBackbone):
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
 
     def forward(
-        self, inputs: Tensor, hidden_state: Tensor | None = None, **kwargs: Tensor
+        self, inputs: Tensor, hidden_state: RecurrentState = None, **kwargs: Tensor
     ) -> BackboneOutput:
         self._validate_input(inputs)
+        if hidden_state is not None:
+            raise ValueError("无状态 backbone 不接受循环状态")
         padding_mask = kwargs.get("padding_mask")
         features = self.encoder(
             self.input_projection(inputs),

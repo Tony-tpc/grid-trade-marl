@@ -75,7 +75,7 @@ def test_single_algorithm_base_and_optimizer_lifecycle() -> None:
     ("masac", TemperatureActorCriticUpdateConfig),
 ])
 def test_shared_update_config_preserves_yaml_fields(name: str, kind: type) -> None:
-    config = algorithm_config_from_dict({"schema_version": 1, "algorithm": name})
+    config = algorithm_config_from_dict({"schema_version": 2, "algorithm": name})
     assert type(config.update) is kind
     data = config_to_dict(config)
     assert config_to_dict(algorithm_config_from_dict(data)) == data

@@ -48,7 +48,7 @@ class MASACLossConfig:
 class MASACConfig:
     """MASAC 配置；环境尺寸由 spec 注入。"""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     algorithm: Literal["masac"] = "masac"
     policy: Buildable[PolicyTopology] = IndependentGaussianConfig()
     critic: Buildable[TwinQEnsemble] = TwinQConfig()
@@ -60,7 +60,7 @@ class MASACConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
-        if self.schema_version != 1 or self.algorithm != "masac":
+        if self.schema_version != 2 or self.algorithm != "masac":
             raise ValueError("MASAC config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.CONTINUOUS:
             raise ValueError("MASAC 不支持当前动作类型")

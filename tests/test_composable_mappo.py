@@ -18,6 +18,7 @@ from marl.envs import (
     RewardStructure,
 )
 from marl.experiment import build_experiment
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import CentralizedValueConfig
 from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import SyncVectorEnv
@@ -40,8 +41,8 @@ def training_config() -> MAPPOConfig:
     config = MAPPOConfig()
     return replace(
         config,
-        policy=IndependentDiscreteConfig(hidden_dim=16),
-        critic=CentralizedValueConfig(hidden_dim=16),
+        policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)),
+        critic=CentralizedValueConfig(backbone=MLPBackboneConfig(output_dim=16)),
         rollout=RolloutConfig(horizon=3),
         update=PPOUpdateConfig(
             learning_rate=1e-3,

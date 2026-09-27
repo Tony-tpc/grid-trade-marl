@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypeVar, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeAlias, TypeVar, cast, get_args, get_origin, get_type_hints
 
 import torch
 import yaml  # type: ignore[import-untyped]
@@ -18,6 +18,7 @@ from marl.algorithms.mappo import MAPPOConfig, MAPPOLossConfig
 from marl.algorithms.masac import MASACConfig, MASACLossConfig
 from marl.algorithms.qmix import QMIXConfig, QMIXLossConfig
 from marl.extensions import Buildable, Category, ExtensionCatalog, ExternalConfig
+from marl.models import BackboneConfig, GRUBackboneConfig, LSTMBackboneConfig, MLPBackboneConfig
 from marl.modules.critic import (
     AttentionQConfig,
     AttentionQNetwork,
@@ -75,6 +76,12 @@ def _flat(cls: type[T], data: object, location: str) -> T:
         if get_origin(hint) is Literal:
             if not any(type(value) is type(v) and value == v for v in allowed):
                 raise ValueError(f"{location}.{name} 必须是 {allowed}")
+        elif hint == tuple[int, ...]:
+            if not isinstance(value, (list, tuple)) or not value or any(
+                type(item) is not int or item < 1 for item in value
+            ):
+                raise TypeError(f"{location}.{name} 必须为非空正整数列表")
+            values[name] = tuple(value)
         elif hint is torch.dtype or torch.dtype in allowed:
             if value not in (None, "bf16"):
                 raise ValueError(f"{location}.{name} 只支持 null 或 bf16")
@@ -94,6 +101,18 @@ def _flat(cls: type[T], data: object, location: str) -> T:
     return cls(**values)
 
 
+def _backbone(data: object, location: str) -> BackboneConfig:
+    values = _mapping(data, location)
+    kind = values.get("kind", "mlp")
+    if kind == "mlp":
+        return _flat(MLPBackboneConfig, values, location)
+    if kind == "gru":
+        return _flat(GRUBackboneConfig, values, location)
+    if kind == "lstm":
+        return _flat(LSTMBackboneConfig, values, location)
+    raise ValueError(f"{location}.kind 只支持 mlp/gru/lstm")
+
+
 def _component(
     data: object,
     builtin: type[Buildable[T]],
@@ -105,6 +124,17 @@ def _component(
     default = builtin()
     kind = values.get("kind", default.kind)
     if kind == default.kind:
+        if builtin in (IndependentDiscreteConfig, CentralizedValueConfig):
+            if unknown := set(values) - {"kind", "backbone"}:
+                raise ValueError(
+                    f"{category} 含旧/未知字段 {sorted(unknown)}；"
+                    "hidden_dim/layer_norm 请迁移到 backbone.output_dim/layer_norm"
+                )
+            backbone = _backbone(values.get("backbone", {}), f"{category}.backbone")
+            component = (IndependentDiscreteConfig(backbone=backbone)
+                         if builtin is IndependentDiscreteConfig
+                         else CentralizedValueConfig(backbone=backbone))
+            return cast(Buildable[T], component)
         return _flat(builtin, values, category)
     if not isinstance(kind, str) or catalog is None:
         raise ValueError(f"未知或不兼容的 {category} kind: {kind}")
@@ -117,8 +147,8 @@ def algorithm_config_from_dict(
     *,
     catalog: ExtensionCatalog | None = None,
 ) -> AlgorithmConfig:
-    if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
-        raise ValueError("schema_version 必须是整数 1")
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
+        raise ValueError("schema_version 必须是整数 2；旧网络字段需迁移到 backbone 配置")
     name = data.get("algorithm")
     common = {"schema_version", "algorithm", "policy", "loss", "update"}
     if name == "mappo":

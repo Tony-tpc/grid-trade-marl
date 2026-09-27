@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
+from marl.core.recurrent import RecurrentState, map_state
+
 
 @dataclass(slots=True)
 class MARLBatch:
@@ -34,6 +36,15 @@ class MARLBatch:
     action_mask: Tensor | None = None
     next_action_mask: Tensor | None = None
     extras: dict[str, Tensor] = field(default_factory=dict)
+    # 仅序列训练使用；状态是每条序列开始前的 [K,B,(N),H]，不是每个时间步的状态。
+    policy_state: RecurrentState = None
+    value_state: RecurrentState = None
+    sequence_mask: Tensor | None = None
+    valid_sample_count: int | None = None
+
+    def valid(self, value: Tensor) -> Tensor:
+        """完整序列前向之后选择有效位置，保留 N，不对 padding 计算目标。"""
+        return value[self.sequence_mask] if self.sequence_mask is not None else value
 
     def terminal_flags(self) -> tuple[Tensor, Tensor]:
         """返回逐智能体终止标记，缺失时使用全 False。"""
@@ -72,6 +83,15 @@ class MARLBatch:
             )
         # 只检查 shape 元数据，不对 GPU tensor 做 .item()/isfinite 等同步。
         # 动作类别、合法范围和 extras 的数学含义仍由具体算法验证。
+        if self.sequence_mask is not None:
+            if self.observations.ndim != 4 or (
+                self.sequence_mask.shape != self.observations.shape[:2]
+                or self.sequence_mask.dtype != torch.bool
+                or self.sequence_mask.device != self.observations.device
+            ):
+                raise ValueError("sequence_mask 必须是与 [B,T,N,O] 对应的 bool [B,T]")
+            if self.valid_sample_count is None or self.valid_sample_count < 1:
+                raise ValueError("序列 batch 必须声明正的 valid_sample_count")
         agent_shape = self.observations.shape[:-1]
         leading_shape = self.observations.shape[:-2]
         for name in ("rewards", "terminated", "truncated"):
@@ -84,8 +104,10 @@ class MARLBatch:
             raise ValueError("next_observations 必须与 observations 形状一致")
         if self.actions is not None and not (
             self.actions.shape == agent_shape
-            or (self.actions.ndim == self.observations.ndim
-                and self.actions.shape[:-1] == agent_shape)
+            or (
+                self.actions.ndim == self.observations.ndim
+                and self.actions.shape[:-1] == agent_shape
+            )
         ):
             raise ValueError("actions 必须为 [...,N] 或 [...,N,A]")
         for name in ("state", "next_state"):
@@ -116,6 +138,14 @@ class MARLBatch:
             next_state=move(self.next_state),
             action_mask=move(self.action_mask),
             next_action_mask=move(self.next_action_mask),
+            policy_state=map_state(
+                self.policy_state, lambda t: t.to(device, non_blocking=non_blocking)
+            ),
+            value_state=map_state(
+                self.value_state, lambda t: t.to(device, non_blocking=non_blocking)
+            ),
+            sequence_mask=move(self.sequence_mask),
+            valid_sample_count=self.valid_sample_count,
             extras={
                 key: tensor.to(device, non_blocking=non_blocking)
                 for key, tensor in self.extras.items()
@@ -140,4 +170,12 @@ class MARLBatch:
             action_mask=pin(self.action_mask),
             next_action_mask=pin(self.next_action_mask),
             extras={key: tensor.pin_memory() for key, tensor in self.extras.items()},
+            policy_state=map_state(
+                self.policy_state, lambda t: t.pin_memory() if not t.is_cuda else t
+            ),
+            value_state=map_state(
+                self.value_state, lambda t: t.pin_memory() if not t.is_cuda else t
+            ),
+            sequence_mask=pin(self.sequence_mask),
+            valid_sample_count=self.valid_sample_count,
         )

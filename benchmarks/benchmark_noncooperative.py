@@ -16,6 +16,7 @@ import time
 import traceback
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from importlib.metadata import version
@@ -34,6 +35,7 @@ from benchmarks.run_state import (
     source_identity,
 )
 from marl.algorithms import (
+    MAPPO,
     MAACConfig,
     MADDPGConfig,
     MAPPOConfig,
@@ -46,12 +48,14 @@ from marl.algorithms.maddpg import MADDPGLossConfig
 from marl.algorithms.mappo import MAPPOLossConfig
 from marl.algorithms.masac import MASACLossConfig
 from marl.config import AlgorithmConfig, algorithm_config_from_dict, config_to_dict
+from marl.core.recurrent import RecurrentState
 from marl.envs import (
     ActionKind,
     MPE2SimpleAdversaryConfig,
     build_mpe2_simple_adversary,
 )
 from marl.experiment import build_experiment
+from marl.models import BackboneConfig, GRUBackboneConfig, LSTMBackboneConfig, MLPBackboneConfig
 from marl.modules.critic import (
     AttentionQConfig,
     CentralizedValueConfig,
@@ -127,7 +131,7 @@ class BenchmarkSettings:
     normalize_targets: bool = False
     detailed_evaluation: bool = True
     evaluation_seed: int = 1_000_000
-    health_value_limit: float = 10_000.
+    health_value_limit: float = 10_000.0
     health_low_entropy_ratio: float = 0.01
     health_clip_rate_limit: float = 0.95
     health_warning_intervals: int = 3
@@ -135,8 +139,14 @@ class BenchmarkSettings:
     train_every_transitions: int = 1
     gradient_steps: int = 1
     checkpoint_interval_steps: int = 1000
+    actor_backbone: str = "mlp"
+    critic_backbone: str = "mlp"
+    sequence_length: int | None = None
 
     def __post_init__(self) -> None:
+        if any(kind not in ("mlp", "gru", "lstm")
+               for kind in (self.actor_backbone, self.critic_backbone)):
+            raise ValueError("MAPPO backbone 只支持 mlp/gru/lstm")
         required = (
             self.train_episodes,
             self.eval_episodes,
@@ -147,8 +157,10 @@ class BenchmarkSettings:
         )
         if any(value < 1 for value in required):
             raise ValueError("所有基准规模参数必须大于 0")
-        if min(self.train_every_transitions, self.gradient_steps,
-               self.checkpoint_interval_steps) < 1:
+        if (
+            min(self.train_every_transitions, self.gradient_steps, self.checkpoint_interval_steps)
+            < 1
+        ):
             raise ValueError("更新频率、梯度步和 checkpoint 间隔必须为正")
         if self.learning_starts is not None and self.learning_starts < self.replay_batch_size:
             raise ValueError("learning_starts 不能小于 replay batch_size")
@@ -194,6 +206,15 @@ def _training_iterations(settings: BenchmarkSettings) -> int:
     return quotient
 
 
+def _benchmark_backbone(kind: str, settings: BenchmarkSettings) -> BackboneConfig:
+    """实验参数接线，不是网络工厂；Config 本身负责 build。"""
+    if kind == "gru":
+        return GRUBackboneConfig(hidden_dim=settings.hidden_dim)
+    if kind == "lstm":
+        return LSTMBackboneConfig(hidden_dim=settings.hidden_dim)
+    return MLPBackboneConfig(output_dim=settings.hidden_dim, layer_norm=settings.layer_norm)
+
+
 def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig:
     replay_steps = settings.target_environment_steps or (
         settings.train_episodes * settings.num_envs * settings.horizon
@@ -205,7 +226,9 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
     hidden = settings.hidden_dim
     if name == "maac":
         return MAACConfig(
-            policy=IndependentDiscreteConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            policy=IndependentDiscreteConfig(
+                backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)
+            ),
             critic=AttentionQConfig(
                 hidden_dim=hidden, attention_heads=4, layer_norm=settings.layer_norm
             ),
@@ -215,14 +238,19 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
         )
     if name == "mappo":
         return MAPPOConfig(
-            policy=IndependentDiscreteConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
-            critic=CentralizedValueConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            policy=IndependentDiscreteConfig(
+                backbone=_benchmark_backbone(settings.actor_backbone, settings)
+            ),
+            critic=CentralizedValueConfig(
+                backbone=_benchmark_backbone(settings.critic_backbone, settings)
+            ),
             loss=MAPPOLossConfig(normalize_targets=settings.normalize_targets),
             update=PPOUpdateConfig(
                 learning_rate=3e-4,
                 epochs=2,
                 mini_batch_size=min(64, settings.horizon * settings.num_envs),
                 max_grad_norm=10.0,
+                sequence_length=settings.sequence_length,
             ),
         )
     if name == "maddpg":
@@ -248,6 +276,21 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
     raise ValueError(f"未知算法：{name}")
 
 
+@contextmanager
+def _evaluation_mode(*algorithms: BaseMARLAlgorithm | None):
+    """评估结束恢复每个子模块原始模式，包括已冻结 target 的 eval 标志。"""
+    modes = [(module, module.training) for algorithm in algorithms if algorithm is not None
+             for module in algorithm.modules()]
+    try:
+        for algorithm in algorithms:
+            if algorithm is not None:
+                algorithm.eval()
+        yield
+    finally:
+        for module, training in modes:
+            module.training = training
+
+
 def _policy_actions(
     algorithm: BaseMARLAlgorithm,
     observations: np.ndarray,
@@ -255,7 +298,8 @@ def _policy_actions(
     *,
     device: torch.device,
     deterministic: bool,
-) -> np.ndarray:
+    policy_state: RecurrentState = None,
+) -> tuple[np.ndarray, RecurrentState]:
     observation_tensor = torch.as_tensor(
         observations, dtype=torch.float32, device=device
     ).unsqueeze(0)
@@ -265,12 +309,19 @@ def _policy_actions(
         else None
     )
     with torch.inference_mode():
-        actions = algorithm.act(
-            observation_tensor,
-            deterministic=deterministic,
-            action_mask=mask_tensor,
-        )
-    return actions.squeeze(0).cpu().numpy()
+        if isinstance(algorithm, MAPPO) and algorithm.recurrent_policy:
+            output = algorithm.policy.act(
+                observation_tensor, deterministic=deterministic,
+                action_mask=mask_tensor, hidden_state=policy_state,
+            )
+            actions, policy_state = output.actions, output.policy_state
+        else:
+            if policy_state is not None:
+                raise ValueError("无状态策略不接受评估 hidden state")
+            actions = algorithm.act(
+                observation_tensor, deterministic=deterministic, action_mask=mask_tensor,
+            )
+    return actions.squeeze(0).cpu().numpy(), policy_state
 
 
 def _gaussian_exploration(
@@ -300,55 +351,61 @@ def _evaluate(
     random_opponent: bool = False,
     trained_role: str | None = None,
 ) -> tuple[list[str], list[list[float]]]:
-    episode_returns: list[list[float]] = []
-    agent_ids: list[str] | None = None
-    for episode in range(settings.eval_episodes):
-        rng = np.random.default_rng(seed + 10_000 + episode)
-        adapter = build_mpe2_simple_adversary(
-            MPE2SimpleAdversaryConfig(horizon=settings.horizon),
-            action_kind=action_kind,
-        )
-        try:
-            step = adapter.reset(seed=seed + 10_000 + episode)
-            agent_ids = list(cast(tuple[str, ...], step.info["agent_ids"]))
-            returns = np.zeros(adapter.spec.num_agents, dtype=np.float64)
-            while not step.done:
-                actions = _policy_actions(
-                    algorithm,
-                    step.observations,
-                    step.action_mask,
-                    device=device,
-                    deterministic=deterministic,
-                )
-                if trained_role is not None:
-                    if random_opponent:
-                        if action_kind == ActionKind.DISCRETE:
-                            assert step.action_mask is not None
-                            other_actions = np.asarray([
-                                rng.choice(np.flatnonzero(mask)) for mask in step.action_mask
-                            ])
+    with _evaluation_mode(algorithm, opponent):
+        episode_returns: list[list[float]] = []
+        agent_ids: list[str] | None = None
+        for episode in range(settings.eval_episodes):
+            rng = np.random.default_rng(seed + 10_000 + episode)
+            adapter = build_mpe2_simple_adversary(
+                MPE2SimpleAdversaryConfig(horizon=settings.horizon),
+                action_kind=action_kind,
+            )
+            try:
+                step = adapter.reset(seed=seed + 10_000 + episode)
+                agent_ids = list(cast(tuple[str, ...], step.info["agent_ids"]))
+                returns = np.zeros(adapter.spec.num_agents, dtype=np.float64)
+                policy_state: RecurrentState = None
+                opponent_state: RecurrentState = None
+                while not step.done:
+                    actions, policy_state = _policy_actions(
+                        algorithm,
+                        step.observations,
+                        step.action_mask,
+                        device=device,
+                        deterministic=deterministic, policy_state=policy_state,
+                    )
+                    if trained_role is not None:
+                        if random_opponent:
+                            if action_kind == ActionKind.DISCRETE:
+                                assert step.action_mask is not None
+                                other_actions = np.asarray(
+                                    [rng.choice(np.flatnonzero(mask)) for mask in step.action_mask]
+                                )
+                            else:
+                                other_actions = rng.uniform(-1.0, 1.0, size=actions.shape).astype(
+                                    np.float32
+                                )
                         else:
-                            other_actions = rng.uniform(
-                                -1., 1., size=actions.shape
-                            ).astype(np.float32)
-                    else:
-                        assert opponent is not None
-                        other_actions = _policy_actions(
-                            opponent, step.observations, step.action_mask,
-                            device=device, deterministic=deterministic,
-                        )
-                    if trained_role == "adversary":
-                        actions[1:] = other_actions[1:]
-                    else:
-                        actions[0] = other_actions[0]
-                step = adapter.step(actions)
-                returns += step.rewards
-            episode_returns.append(returns.tolist())
-        finally:
-            adapter.close()
-    if agent_ids is None:
-        raise RuntimeError("评估没有产生 episode")
-    return agent_ids, episode_returns
+                            assert opponent is not None
+                            other_actions, opponent_state = _policy_actions(
+                                opponent,
+                                step.observations,
+                                step.action_mask,
+                                device=device,
+                                deterministic=deterministic, policy_state=opponent_state,
+                            )
+                        if trained_role == "adversary":
+                            actions[1:] = other_actions[1:]
+                        else:
+                            actions[0] = other_actions[0]
+                    step = adapter.step(actions)
+                    returns += step.rewards
+                episode_returns.append(returns.tolist())
+            finally:
+                adapter.close()
+        if agent_ids is None:
+            raise RuntimeError("评估没有产生 episode")
+        return agent_ids, episode_returns
 
 
 def _cross_play_actions(
@@ -358,26 +415,28 @@ def _cross_play_actions(
     action_mask: np.ndarray | None,
     *,
     device: torch.device,
-) -> np.ndarray:
+    adversary_state: RecurrentState = None, good_state: RecurrentState = None,
+) -> tuple[np.ndarray, RecurrentState, RecurrentState]:
     """组合 A 的 adversary actor 与 B 的 good-agent actors。"""
 
-    adversary_actions = _policy_actions(
+    adversary_actions, adversary_state = _policy_actions(
         adversary_algorithm,
         observations,
         action_mask,
         device=device,
-        deterministic=True,
+        deterministic=True, policy_state=adversary_state,
     )
-    good_actions = _policy_actions(
+    good_actions, good_state = _policy_actions(
         good_team_algorithm,
         observations,
         action_mask,
         device=device,
         deterministic=True,
+        policy_state=good_state,
     )
     joint_actions = good_actions.copy()
     joint_actions[0] = adversary_actions[0]
-    return cast(np.ndarray, joint_actions)
+    return cast(np.ndarray, joint_actions), adversary_state, good_state
 
 
 def _evaluate_cross_play(
@@ -389,30 +448,33 @@ def _evaluate_cross_play(
     device: torch.device,
     seed: int,
 ) -> tuple[float, float]:
-    role_returns: list[tuple[float, float]] = []
-    for episode in range(settings.eval_episodes):
-        adapter = build_mpe2_simple_adversary(
-            MPE2SimpleAdversaryConfig(horizon=settings.horizon),
-            action_kind=action_kind,
-        )
-        try:
-            step = adapter.reset(seed=seed + episode)
-            returns = np.zeros(adapter.spec.num_agents, dtype=np.float64)
-            while not step.done:
-                actions = _cross_play_actions(
-                    adversary_algorithm,
-                    good_team_algorithm,
-                    step.observations,
-                    step.action_mask,
-                    device=device,
-                )
-                step = adapter.step(actions)
-                returns += step.rewards
-            role_returns.append((float(returns[0]), float(returns[1:].mean())))
-        finally:
-            adapter.close()
-    values = np.asarray(role_returns, dtype=np.float64)
-    return float(values[:, 0].mean()), float(values[:, 1].mean())
+    with _evaluation_mode(adversary_algorithm, good_team_algorithm):
+        role_returns: list[tuple[float, float]] = []
+        for episode in range(settings.eval_episodes):
+            adapter = build_mpe2_simple_adversary(
+                MPE2SimpleAdversaryConfig(horizon=settings.horizon),
+                action_kind=action_kind,
+            )
+            try:
+                step = adapter.reset(seed=seed + episode)
+                returns = np.zeros(adapter.spec.num_agents, dtype=np.float64)
+                adversary_state: RecurrentState = None
+                good_state: RecurrentState = None
+                while not step.done:
+                    actions, adversary_state, good_state = _cross_play_actions(
+                        adversary_algorithm,
+                        good_team_algorithm,
+                        step.observations,
+                        step.action_mask,
+                        device=device, adversary_state=adversary_state, good_state=good_state,
+                    )
+                    step = adapter.step(actions)
+                    returns += step.rewards
+                role_returns.append((float(returns[0]), float(returns[1:].mean())))
+            finally:
+                adapter.close()
+        values = np.asarray(role_returns, dtype=np.float64)
+        return float(values[:, 0].mean()), float(values[:, 1].mean())
 
 
 def _metric_summary(rows: list[dict[str, float]]) -> dict[str, dict[str, float]]:
@@ -1434,9 +1496,7 @@ def _gpu_telemetry() -> dict[str, Any]:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="MPE2 simple_adversary 非合作博弈训练稳定性基准"
-    )
+    parser = argparse.ArgumentParser(description="MPE2 simple_adversary 非合作博弈训练稳定性基准")
     parser.add_argument(
         "--algorithms",
         nargs="+",
@@ -1451,11 +1511,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--replay-batch-size", type=int, default=32)
     parser.add_argument("--hidden-dim", type=int, default=64)
     parser.add_argument(
-        "--eval-interval-steps", type=int,
+        "--eval-interval-steps",
+        type=int,
         help="策略评估间隔；默认约 100 个区间，对齐完整 rollout",
     )
     parser.add_argument(
-        "--metrics-interval-steps", type=int,
+        "--metrics-interval-steps",
+        type=int,
         help="训练诊断间隔；默认每个完整 rollout，不额外执行策略评估",
     )
     parser.add_argument("--environment-steps", type=int)
@@ -1468,8 +1530,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--train-every-transitions", type=int, default=1)
     parser.add_argument("--gradient-steps", type=int, default=1)
     parser.add_argument("--checkpoint-interval-steps", type=int, default=1000)
-    parser.add_argument("--basic-evaluation", action="store_true",
-                        help="仅自博弈评估；用于单独测量运行路径，不用于最终学习验收")
+    parser.add_argument("--actor-backbone", choices=("mlp", "gru", "lstm"), default="mlp")
+    parser.add_argument("--critic-backbone", choices=("mlp", "gru", "lstm"), default="mlp")
+    parser.add_argument("--sequence-length", type=int)
+    parser.add_argument(
+        "--basic-evaluation",
+        action="store_true",
+        help="仅自博弈评估；用于单独测量运行路径，不用于最终学习验收",
+    )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument(
         "--output",
@@ -1500,19 +1568,21 @@ def main() -> None:
         train_every_transitions=args.train_every_transitions,
         gradient_steps=args.gradient_steps,
         checkpoint_interval_steps=args.checkpoint_interval_steps,
+        actor_backbone=args.actor_backbone, critic_backbone=args.critic_backbone,
+        sequence_length=args.sequence_length,
     )
     torch.set_num_threads(args.torch_threads)
     device = resolve_device(args.device)
-    artifact_dir = args.artifact_dir or (
-        args.output.parent / f"{args.output.stem}_artifacts"
-    )
+    artifact_dir = args.artifact_dir or (args.output.parent / f"{args.output.stem}_artifacts")
     report = run_benchmark(
         list(dict.fromkeys(args.algorithms)),
         list(dict.fromkeys(args.seeds)),
         settings,
         device=device,
         artifact_dir=artifact_dir,
-        workers=args.workers, resume=args.resume, threads=args.torch_threads,
+        workers=args.workers,
+        resume=args.resume,
+        threads=args.torch_threads,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(

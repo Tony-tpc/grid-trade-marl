@@ -7,7 +7,7 @@ seed、device、并行环境数和输出路径由脚本/命令行管理。
 
 ## 公共规则
 
-算法 YAML 仅 `schema_version: 1` 和 `algorithm` 必填；其余节及字段可省略，
+算法 YAML 仅 `schema_version: 2` 和 `algorithm` 必填；其余节及字段可省略，
 使用对应 Config 的默认值。五份算法模板显式列出全部默认值，并有 Python/YAML 等价测试。
 未知字段、错误类型、非有限浮点数、未知组件与环境尺寸字段会被拒绝。
 没有 `type/options` 层；字段直接位于对应节中。
@@ -32,11 +32,11 @@ seed、device、并行环境数和输出路径由脚本/命令行管理。
 
 | 使用位置 | 默认 kind | 可选字段及默认值 |
 |---|---|---|
-| MAPPO/MAAC policy | independent_discrete | hidden_dim=128 |
+| MAPPO/MAAC policy | independent_discrete | backbone=MLPBackboneConfig() |
 | MADDPG policy | independent_deterministic | hidden_dim=128 |
 | MASAC policy | independent_gaussian | hidden_dim=128 |
 | QMIX policy | shared_discrete_q | hidden_dim=128 |
-| MAPPO critic | centralized_value | hidden_dim=128 |
+| MAPPO critic | centralized_value | backbone=MLPBackboneConfig() |
 | MAAC critic | attention_q | hidden_dim=128，attention_heads=4 |
 | MADDPG critic | independent_centralized_q | hidden_dim=128 |
 | MASAC critic | twin_independent_centralized_q | hidden_dim=128 |
@@ -64,8 +64,9 @@ hidden_dim/mixing_dim 必须为正整数；attention_heads 必须为正整数且
 | replay / 离策略 | batch_size=256 | 每次采样数，1..capacity |
 | update / 全部 | learning_rate=0.0003 | Adam 学习率，>0 |
 | update / 全部 | max_grad_norm=10.0 | >0 的梯度上限；null 关闭 |
+| update / MAPPO | sequence_length=null | 循环网络 null 用整段，正整数指定片段；纯 MLP 仅 null |
 | update / MAPPO | epochs=4 | 同一 fresh rollout 更新轮数，正整数 |
-| update / MAPPO | mini_batch_size=256 | 展平时间/环境维后的批大小，正整数 |
+| update / MAPPO | mini_batch_size=256 | 时间位置数上限；循环路径按整条片段采样 |
 | update / 离策略 | amp_dtype=null | null=FP32；bf16 仅支持相应 CUDA 设备 |
 | target_update / 离策略 | kind=soft，tau=0.005 | 每次更新后 Polyak 同步，tau∈(0,1] |
 | target_update / 离策略 | kind=hard，interval=1 | 可替代 soft；每 interval 次更新完整同步，正整数 |
@@ -96,3 +97,20 @@ YAML 可使用 gae_lambda 代替 lambda，但不能同时填写两者。
 MPE2 simple_adversary 配置支持 `num_good_agents`、`horizon` 和
 `dynamic_rescaling`。它同样输出 individual reward；将 `action_kind` 设为
 `discrete` 可用于 MAAC/MAPPO，设为 `continuous` 可用于 MADDPG/MASAC。
+
+## MAPPO 的 MLP / GRU / LSTM
+
+MAPPO 的 policy 和 critic 分别使用嵌套 `backbone`；两侧可以独立选择。
+`kind: mlp` 使用 `hidden_dims: [128,128]`、`output_dim: 128`、
+`layer_norm: false`；`kind: gru/lstm` 只使用 `hidden_dim: 128`、
+`num_layers: 1`，不能把 MLP 字段混入循环网络。
+
+旧顶层 `hidden_dim=64` 对应 `backbone.output_dim=64`，中间层仍是
+`[128,128]`。算法配置升级到 schema 2，环境 schema 仍为 1。
+MAAC 的离散 policy 也迁移到嵌套配置，但明确拒绝循环网络，因为尚无序列 replay。
+
+`update.sequence_length: null` 在循环网络中使用整段 rollout；正整数表示连续
+片段长度，不得超过 horizon 或 mini_batch_size。纯 MLP 不填写非空值。
+mini_batch_size 按时间位置计数，不乘智能体数，循环路径包含补齐位置。
+完整用法、截断反向传播近似及 checkpoint 迁移见
+[循环 MAPPO 说明](../../docs/recurrent_mappo.md)。

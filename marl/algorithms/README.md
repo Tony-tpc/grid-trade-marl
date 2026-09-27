@@ -155,7 +155,8 @@ return 的更新前拟合诊断；训练 minibatch 的 EV/RMSE 平均不能当�
 
 - replay buffer 和采样比例；
 - observation/reward normalization；
-- recurrent policy 的 hidden state 和 episode mask；
+- MAPPO 循环策略已支持固定 rollout 内的 hidden state 和序列 PPO；跨 rollout 续接、
+  部分 reset 与离策略序列 replay 尚未实现；
 - 异质智能体是否分别使用 Actor；
 - termination 与 time-limit truncation 的区别；
 - 多个优化器、学习率调度、评估和 checkpoint 频率。

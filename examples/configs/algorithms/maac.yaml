@@ -1,12 +1,15 @@
 # MAAC 完整默认配置；以下值与 Python MAACConfig() 一致。
 # 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
-schema_version: 1  # 必填；配置版本，只允许整数 1。
+schema_version: 2  # 必填；配置版本，只允许整数 2。
 algorithm: maac  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
-  layer_norm: false  # 可选；各隐藏层 LayerNorm，默认关闭。
-  kind: independent_discrete  # 可选；组件实现名称，默认值如本行。
-  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
+  kind: independent_discrete
+  backbone:
+    kind: mlp  # MAPPO 可选 mlp/gru/lstm；MAAC 仅 mlp。
+    hidden_dims: [128, 128]  # MLP 中间层正整数列表。
+    output_dim: 128  # MLP 输出特征维度。
+    layer_norm: false  # MLP 各层归一化，默认关闭。
 
 critic:
   layer_norm: false  # 可选；critic 隐藏层 LayerNorm，默认关闭。

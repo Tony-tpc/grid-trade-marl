@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import torch
 
-TRAINER_CHECKPOINT_SCHEMA_VERSION = 3
+TRAINER_CHECKPOINT_SCHEMA_VERSION = 4
 
 
 def build_trainer_checkpoint_state(
@@ -29,18 +29,30 @@ def build_trainer_checkpoint_state(
 
 
 def validate_trainer_checkpoint_state(
-    state: Mapping[str, Any], config_data: Mapping[str, object] | None
+    state: Mapping[str, Any], config_data: Mapping[str, object] | None, *,
+    algorithm_state: Mapping[str, Any] | None = None,
 ) -> None:
     """统一检查 checkpoint schema 与实验配置，禁止静默部分恢复。"""
 
     if state.get("schema_version") != TRAINER_CHECKPOINT_SCHEMA_VERSION:
         raise ValueError(
-            "不兼容的 trainer checkpoint：旧 schema 缺少新版统计语义；"
+            "不兼容的 trainer checkpoint：旧 schema 缺少新版 backbone/序列训练契约；"
             "可显式加载 algorithm 权重用于评估/诊断，不支持静默精确续训"
         )
     expected = dict(config_data) if config_data is not None else None
     if state.get("config") != expected:
         raise ValueError("checkpoint config 与当前 trainer config 不一致")
+    if algorithm_state is not None:
+        saved = state.get("algorithm")
+        if not isinstance(saved, Mapping) or set(saved) != set(algorithm_state):
+            raise ValueError("checkpoint 网络参数名称与当前结构不一致")
+        for name, current in algorithm_state.items():
+            value = saved[name]
+            if isinstance(current, torch.Tensor) and (
+                not isinstance(value, torch.Tensor) or current.shape != value.shape
+                or current.dtype != value.dtype
+            ):
+                raise ValueError(f"checkpoint 网络参数 {name} 形状/dtype 与当前结构不一致")
 
 
 def capture_torch_rng_state() -> dict[str, object]:

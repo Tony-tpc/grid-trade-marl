@@ -22,6 +22,7 @@ from marl.envs.config import (
 )
 from marl.envs.energy_trading import EnergyProfiles, EnergyTradingConfig, EnergyTradingEnv
 from marl.envs.energy_trading_adapter import EnergyTradingAdapter
+from marl.envs.memory_cue import MemoryCueAdapter
 from marl.envs.mpe2_simple_adversary_adapter import (
     MPE2SimpleAdversaryAdapter,
     MPE2SimpleAdversaryConfig,
@@ -29,6 +30,7 @@ from marl.envs.mpe2_simple_adversary_adapter import (
 )
 
 __all__ = [
+    "MemoryCueAdapter",
     "ActionKind",
     "EnvironmentAdapter",
     "EnvironmentSpec",

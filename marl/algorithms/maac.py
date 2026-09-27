@@ -52,7 +52,7 @@ class MAACLossConfig:
 class MAACConfig:
     """MAAC 配置；环境尺寸由 spec 注入。"""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     algorithm: Literal["maac"] = "maac"
     policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
     critic: Buildable[AttentionQNetwork] = AttentionQConfig()
@@ -64,7 +64,7 @@ class MAACConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
-        if self.schema_version != 1 or self.algorithm != "maac":
+        if self.schema_version != 2 or self.algorithm != "maac":
             raise ValueError("MAAC config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAAC 不支持当前动作类型")
@@ -86,6 +86,8 @@ class MAAC(BaseMARLAlgorithm):
         config.validate(spec)
         self.config = config
         self.policy = config.policy.build(spec)
+        if getattr(self.policy, "is_recurrent", False):
+            raise ValueError("MAAC 尚未支持循环 policy 的序列 replay；请使用 MLP backbone")
         self.critic = config.critic.build(spec)
         self.target_policy = frozen_target(self.policy)
         self.target_critic = frozen_target(self.critic)

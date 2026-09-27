@@ -7,6 +7,8 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Categorical, Normal, TanhTransform
 
+from marl.core.recurrent import RecurrentState
+
 
 @dataclass(slots=True)
 class ActionHeadOutput:
@@ -20,6 +22,7 @@ class ActionHeadOutput:
     log_prob: Tensor
     entropy: Tensor
     distribution_params: dict[str, Tensor]
+    hidden_state: RecurrentState = None
 
 
 class BaseActionHead(nn.Module, ABC):

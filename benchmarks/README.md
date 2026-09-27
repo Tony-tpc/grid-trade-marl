@@ -320,3 +320,20 @@ MAPPO 回退/显存门槛通过。原始结果保留五次耗时范围：例如 
 这些数值是本机结果，不作为其他机器的固定性能承诺。当前系统找不到 MSVC `cl.exe`，
 因此没有启用 `torch.compile`；BF16 硬件可用但仍保持默认关闭，避免在未完成算法级
 精度对照前改变数值容差。
+
+## MAPPO backbone 短程对照
+
+`python -m benchmarks.benchmark_recurrent --output benchmark-results/recurrent_mappo --device cpu`
+执行 MLP/GRU/LSTM × seeds 7/17/29：记忆任务各 20k 步、MPE 各 10k 步。
+不新增算法名称；`algorithm=mappo`，使用 `variant_id` 和独立目录区分网络。
+已有非空目录会被拒绝，避免误覆盖。任务不是等参数量对照，报告保留网络参数量。
+
+`python -m benchmarks.plot_recurrent benchmark-results/recurrent_mappo/report.json --output benchmark-results/recurrent_mappo/plots`
+生成逐 seed 原始曲线、Student-t 区间、分离的角色回报、损失、PPO 诊断、梯度、
+隐藏状态、效率和 cross-play 图。小样本区间可能很宽，不解读为论文级收敛结论。
+
+报告 validator 对照启动清单核验 18 个运行、精确步数、101 个评估点、
+逐 rollout 诊断、真实 optimizer steps、checkpoint 校验值和独立终局评估。
+记忆任务不达阈值时保留全部结果并返回失败，不自动换种子或增加预算。
+`--tasks memory/mpe --seeds ... --memory-steps ... --mpe-steps ...` 仅供明确的
+冒烟/诊断预算；必须与默认正式短程预算区别记录。环境动作空间始终为离散。

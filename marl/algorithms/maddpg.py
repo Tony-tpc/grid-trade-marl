@@ -52,7 +52,7 @@ class MADDPGLossConfig:
 class MADDPGConfig:
     """MADDPG 配置；环境尺寸由 spec 注入。"""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     algorithm: Literal["maddpg"] = "maddpg"
     policy: Buildable[PolicyTopology] = IndependentDeterministicConfig()
     critic: Buildable[QEnsemble] = IndependentQConfig()
@@ -64,7 +64,7 @@ class MADDPGConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
-        if self.schema_version != 1 or self.algorithm != "maddpg":
+        if self.schema_version != 2 or self.algorithm != "maddpg":
             raise ValueError("MADDPG config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.CONTINUOUS:
             raise ValueError("MADDPG 不支持当前动作类型")

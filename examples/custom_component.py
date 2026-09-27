@@ -65,7 +65,7 @@ def main() -> None:
     )
     config = algorithm_config_from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "algorithm": "mappo",
             "critic": {"kind": "tanh_value", "hidden_dim": 32},
             "rollout": {"horizon": 4},

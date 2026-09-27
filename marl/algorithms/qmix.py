@@ -36,7 +36,7 @@ class QMIXLossConfig:
 class QMIXConfig:
     """QMIX 配置；环境尺寸由 spec 注入。"""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     algorithm: Literal["qmix"] = "qmix"
     policy: Buildable[LocalQPolicy] = SharedDiscreteQConfig()
     mixer: Buildable[MixingNetwork] = QMixerConfig()
@@ -48,7 +48,7 @@ class QMIXConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
-        if self.schema_version != 1 or self.algorithm != "qmix":
+        if self.schema_version != 2 or self.algorithm != "qmix":
             raise ValueError("QMIX config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("QMIX 不支持当前动作类型")

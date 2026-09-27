@@ -20,6 +20,7 @@ from benchmarks.benchmark_noncooperative import BenchmarkSettings, _train_mappo,
 from marl.algorithms import MAAC, MAPPO, MAACConfig, MAPPOConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, MPE2SimpleAdversaryConfig, Transition, build_mpe2_simple_adversary
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import AttentionQConfig, CentralizedValueConfig
 from marl.modules.policy import IndependentDiscreteConfig
 from marl.runtime import SyncVectorEnv, TensorReplayBuffer, resolve_device
@@ -73,7 +74,7 @@ def _off_policy_benchmark(
 ) -> dict[str, Any]:
     config = replace(
         MAACConfig(),
-        policy=IndependentDiscreteConfig(hidden_dim=32),
+        policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=32)),
         critic=AttentionQConfig(hidden_dim=32, attention_heads=4),
     )
     probe = build_mpe2_simple_adversary(
@@ -188,8 +189,8 @@ def _mappo_benchmark(
     size = num_envs * horizon
     config = replace(
         MAPPOConfig(),
-        policy=IndependentDiscreteConfig(hidden_dim=32),
-        critic=CentralizedValueConfig(hidden_dim=32),
+        policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=32)),
+        critic=CentralizedValueConfig(backbone=MLPBackboneConfig(output_dim=32)),
         update=PPOUpdateConfig(epochs=2, mini_batch_size=size),
     )
     torch.manual_seed(7)

@@ -1,6 +1,6 @@
 # MADDPG 完整默认配置；以下值与 Python MADDPGConfig() 一致。
 # 仅 schema_version 和 algorithm 必填；其余节或字段省略时使用这里的默认值。
-schema_version: 1  # 必填；配置版本，只允许整数 1。
+schema_version: 2  # 必填；配置版本，只允许整数 2。
 algorithm: maddpg  # 必填；选择对应配置类型，切换算法应换整份 YAML。
 
 policy:
