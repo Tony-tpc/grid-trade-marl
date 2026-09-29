@@ -10,9 +10,22 @@ from torch.nn import functional as F
 
 from marl.core.recurrent import RecurrentState
 from marl.envs.base import EnvironmentSpec
-from marl.models import BackboneConfig, MLPBackboneConfig
+from marl.models import (
+    BackboneConfig,
+    EncoderConfig,
+    GNNBackboneConfig,
+    GRUBackboneConfig,
+    IdentityEncoderConfig,
+    LSTMBackboneConfig,
+    MLPBackboneConfig,
+)
 from marl.models.base import BaseBackbone
-from marl.models.mlp import MLPBackbone
+from marl.models.encoder import IdentityEncoder, InputEncoder
+from marl.modules.encoding import JointActionEncoder, ObservationEncoder, state_encoder
+
+_DEFAULT_ENCODER = IdentityEncoderConfig()
+_DEFAULT_BACKBONE = MLPBackboneConfig()
+_DEFAULT_EMBEDDING = MLPBackboneConfig(hidden_dims=())
 
 
 def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor:
@@ -40,7 +53,10 @@ class RecurrentValueNetwork(Protocol):
     is_recurrent: bool
 
     def __call__(
-        self, inputs: Tensor, *, hidden_state: RecurrentState = None,
+        self,
+        inputs: Tensor,
+        *,
+        hidden_state: RecurrentState = None,
         return_state: Literal[True],
     ) -> tuple[Tensor, RecurrentState]: ...
 
@@ -90,8 +106,11 @@ class CentralizedCritic(nn.Module):
     critic 猜测各算法不同的数据布局。
     """
 
-    def __init__(self, backbone: BaseBackbone, output_dim: int = 1) -> None:
+    def __init__(
+        self, backbone: BaseBackbone, output_dim: int = 1, encoder: InputEncoder | None = None
+    ) -> None:
         super().__init__()
+        self.encoder = encoder if encoder is not None else IdentityEncoder(backbone.input_dim)
         self.backbone = backbone
         self.is_recurrent = backbone.is_recurrent
         # 输入是 state 时可表示 V，输入含联合动作时可表示 Q；网络不猜测算法。
@@ -102,21 +121,31 @@ class CentralizedCritic(nn.Module):
 
     @overload
     def forward(
-        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        self,
+        centralized_input: Tensor,
+        *,
+        hidden_state: RecurrentState = None,
         return_state: Literal[False] = False,
     ) -> Tensor: ...
 
     @overload
     def forward(
-        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        self,
+        centralized_input: Tensor,
+        *,
+        hidden_state: RecurrentState = None,
         return_state: Literal[True],
     ) -> tuple[Tensor, RecurrentState]: ...
 
     def forward(
-        self, centralized_input: Tensor, *, hidden_state: RecurrentState = None,
+        self,
+        centralized_input: Tensor,
+        *,
+        hidden_state: RecurrentState = None,
         return_state: bool = False,
     ) -> Tensor | tuple[Tensor, RecurrentState]:
         """单步 [B,S] 或连续序列 [B,T,S]，value 最后一维始终保留 N。"""
+        centralized_input = self.encoder(centralized_input)
         single_step = self.is_recurrent and centralized_input.ndim == 2
         encoded = self.backbone(
             centralized_input.unsqueeze(1) if single_step else centralized_input,
@@ -132,13 +161,21 @@ class IndependentCentralizedCritics(nn.Module):
     """参数独立的逐智能体集中式 Q 网络。"""
 
     def __init__(
-        self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool = False
+        self,
+        spec: EnvironmentSpec,
+        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        graph: GNNBackboneConfig | None = None,
     ) -> None:
         super().__init__()
-        self.critics = nn.ModuleList(
-            CentralizedCritic(MLPBackbone(input_dim, output_dim=hidden_dim, layer_norm=layer_norm))
-            for _ in range(num_agents)
-        )
+        if not isinstance(backbone, MLPBackboneConfig):
+            raise ValueError("离策略 critic 不支持循环 backbone；请使用 history encoder")
+        self.critics = nn.ModuleList()
+        for _ in range(spec.num_agents):
+            inputs = JointActionEncoder(spec, encoder, graph)
+            self.critics.append(
+                CentralizedCritic(backbone.build(inputs.output_dim), encoder=inputs)
+            )
 
     def forward(self, centralized_input: Tensor) -> Tensor:
         return torch.stack(
@@ -151,11 +188,15 @@ class TwinIndependentCentralizedCritics(nn.Module):
     """MASAC 使用的两组独立集中式 Q 网络。"""
 
     def __init__(
-        self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool = False
+        self,
+        spec: EnvironmentSpec,
+        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        graph: GNNBackboneConfig | None = None,
     ) -> None:
         super().__init__()
-        self.first = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim, layer_norm)
-        self.second = IndependentCentralizedCritics(num_agents, input_dim, hidden_dim, layer_norm)
+        self.first = IndependentCentralizedCritics(spec, backbone, encoder, graph)
+        self.second = IndependentCentralizedCritics(spec, backbone, encoder, graph)
 
     def forward(self, centralized_input: Tensor) -> tuple[Tensor, Tensor]:
         return self.first(centralized_input), self.second(centralized_input)
@@ -172,32 +213,37 @@ class AttentionCritic(nn.Module):
 
     def __init__(
         self,
-        num_agents: int,
-        observation_dim: int,
-        action_dim: int,
-        hidden_dim: int,
-        attention_heads: int,
-        layer_norm: bool = False,
+        spec: EnvironmentSpec,
+        embedding: MLPBackboneConfig = _DEFAULT_EMBEDDING,
+        backbone: MLPBackboneConfig = _DEFAULT_EMBEDDING,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        attention_heads: int = 4,
+        graph: GNNBackboneConfig | None = None,
     ) -> None:
         super().__init__()
-        if hidden_dim % attention_heads:
+        if not isinstance(embedding, MLPBackboneConfig) or not isinstance(
+            backbone, MLPBackboneConfig
+        ):
+            raise ValueError("MAAC embedding/Q backbone 必须为 MLP；时序编码使用 encoder")
+        hidden_dim = embedding.output_dim
+        num_agents, observation_dim, action_dim = (
+            spec.num_agents,
+            spec.observation_dim,
+            spec.action_dim,
+        )
+        if attention_heads < 1 or hidden_dim % attention_heads:
             raise ValueError("hidden_dim 必须能被 attention_heads 整除")
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
         self.hidden_dim = hidden_dim
+        self.encoder = ObservationEncoder(spec, encoder, graph)
+        encoded_dim = self.encoder.output_dim
         self.own_encoders = nn.ModuleList(
-            nn.Sequential(nn.Linear(observation_dim, hidden_dim),
-                          *([nn.LayerNorm(hidden_dim)] if layer_norm else []), nn.ReLU())
-            for _ in range(num_agents)
+            embedding.build(encoded_dim).network for _ in range(num_agents)
         )
         self.state_action_encoders = nn.ModuleList(
-            nn.Sequential(
-                nn.Linear(observation_dim + action_dim, hidden_dim),
-                *([nn.LayerNorm(hidden_dim)] if layer_norm else []),
-                nn.ReLU(),
-            )
-            for _ in range(num_agents)
+            embedding.build(encoded_dim + action_dim).network for _ in range(num_agents)
         )
         self.attention = nn.MultiheadAttention(hidden_dim, attention_heads, batch_first=True)
         self.register_buffer(
@@ -207,10 +253,8 @@ class AttentionCritic(nn.Module):
         )
         self.q_heads = nn.ModuleList(
             nn.Sequential(
-                nn.Linear(2 * hidden_dim, hidden_dim),
-                *([nn.LayerNorm(hidden_dim)] if layer_norm else []),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, action_dim),
+                *backbone.build(2 * hidden_dim).network,
+                nn.Linear(backbone.output_dim, action_dim),
             )
             for _ in range(num_agents)
         )
@@ -225,6 +269,7 @@ class AttentionCritic(nn.Module):
         if actions.shape != observations.shape[:-1]:
             raise ValueError("离散 actions 应为 [...,N] 且前置维与 observations 一致")
         leading = observations.shape[:-2]
+        observations = self.encoder(observations)
         own = torch.stack(
             [
                 encoder(observations[..., index, :])
@@ -256,10 +301,7 @@ class AttentionCritic(nn.Module):
             context = context.reshape(*leading, self.num_agents, self.hidden_dim)
         q_input = torch.cat((own, context), dim=-1)
         q_values = torch.stack(
-            [
-                head(q_input[..., index, :])
-                for index, head in enumerate(self.q_heads)
-            ],
+            [head(q_input[..., index, :]) for index, head in enumerate(self.q_heads)],
             dim=-2,
         )
         result: Tensor = q_values.reshape(*leading, self.num_agents, self.action_dim)
@@ -270,71 +312,77 @@ class AttentionCritic(nn.Module):
 class CentralizedValueConfig:
     kind: Literal["centralized_value"] = "centralized_value"
     backbone: BackboneConfig = MLPBackboneConfig()
+    encoder: EncoderConfig = IdentityEncoderConfig()
+    graph: GNNBackboneConfig | None = None
 
     def build(self, spec: EnvironmentSpec) -> CentralizedCritic:
+        if not isinstance(
+            self.backbone, (MLPBackboneConfig, GRUBackboneConfig, LSTMBackboneConfig)
+        ):
+            raise ValueError("value backbone 只支持 MLP/GRU/LSTM；历史/图使用 encoder/graph")
+        inputs = state_encoder(spec, self.encoder, self.graph)
         return CentralizedCritic(
-            self.backbone.build(spec.state_dim),
+            self.backbone.build(inputs.output_dim),
             output_dim=spec.num_agents,
+            encoder=inputs,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class AttentionQConfig:
     kind: Literal["attention_q"] = "attention_q"
-    hidden_dim: int = 128
+    encoder: EncoderConfig = IdentityEncoderConfig()
+    embedding: MLPBackboneConfig = MLPBackboneConfig(hidden_dims=())
+    backbone: MLPBackboneConfig = MLPBackboneConfig(hidden_dims=())
+    graph: GNNBackboneConfig | None = None
     attention_heads: int = 4
-    layer_norm: bool = False
 
     def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
-        if self.attention_heads < 1 or self.hidden_dim % self.attention_heads:
-            raise ValueError("attention_heads 必须为正且整除 hidden_dim")
+        if not isinstance(self.embedding, MLPBackboneConfig) or not isinstance(
+            self.backbone, MLPBackboneConfig
+        ):
+            raise ValueError("MAAC embedding/backbone 必须为 MLP")
+        if self.attention_heads < 1 or self.embedding.output_dim % self.attention_heads:
+            raise ValueError("attention_heads 必须为正且整除 embedding.output_dim")
 
     def build(self, spec: EnvironmentSpec) -> AttentionCritic:
         return AttentionCritic(
-            spec.num_agents,
-            spec.observation_dim,
-            spec.action_dim,
-            self.hidden_dim,
+            spec,
+            self.embedding,
+            self.backbone,
+            self.encoder,
             self.attention_heads,
-            self.layer_norm,
+            self.graph,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class IndependentQConfig:
     kind: Literal["independent_centralized_q"] = "independent_centralized_q"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    encoder: EncoderConfig = IdentityEncoderConfig()
+    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    graph: GNNBackboneConfig | None = None
 
     def build(self, spec: EnvironmentSpec) -> IndependentCentralizedCritics:
         return IndependentCentralizedCritics(
-            spec.num_agents,
-            spec.num_agents * (spec.observation_dim + spec.action_dim),
-            self.hidden_dim,
-            self.layer_norm,
+            spec,
+            self.backbone,
+            self.encoder,
+            self.graph,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class TwinQConfig:
     kind: Literal["twin_independent_centralized_q"] = "twin_independent_centralized_q"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    encoder: EncoderConfig = IdentityEncoderConfig()
+    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    graph: GNNBackboneConfig | None = None
 
     def build(self, spec: EnvironmentSpec) -> TwinIndependentCentralizedCritics:
         return TwinIndependentCentralizedCritics(
-            spec.num_agents,
-            spec.num_agents * (spec.observation_dim + spec.action_dim),
-            self.hidden_dim,
-            self.layer_norm,
+            spec,
+            self.backbone,
+            self.encoder,
+            self.graph,
         )

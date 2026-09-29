@@ -139,7 +139,7 @@ Returns:
 
 ## OnPolicyActorCritic.state_dict
 
-[源码位置](../../marl/training/on_policy.py#L92) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L90) · [页内目录](#符号目录)
 
 ```python
 def state_dict(self, *args: Any, **kwargs: Any) -> Mapping[str, Any]
@@ -160,7 +160,7 @@ Returns:
 
 ## OnPolicyActorCritic.load_state_dict
 
-[源码位置](../../marl/training/on_policy.py#L104) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L102) · [页内目录](#符号目录)
 
 ```python
 def load_state_dict(self, state_dict: Mapping[str, Any], strict: bool=True) -> Any
@@ -181,7 +181,7 @@ Returns:
 
 ## _allocate
 
-[源码位置](../../marl/training/on_policy.py#L117) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L115) · [页内目录](#符号目录)
 
 ```python
 def _allocate(horizon: int, num_envs: int, *shape: int, dtype: torch.dtype, pin_memory: bool=False) -> Tensor
@@ -205,7 +205,7 @@ Returns:
 
 ## _index_optional
 
-[源码位置](../../marl/training/on_policy.py#L139) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L137) · [页内目录](#符号目录)
 
 ```python
 def _index_optional(value: Tensor | None, indices: Tensor) -> Tensor | None
@@ -226,7 +226,7 @@ Returns:
 
 ## _index_batch
 
-[源码位置](../../marl/training/on_policy.py#L152) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L150) · [页内目录](#符号目录)
 
 ```python
 def _index_batch(batch: MARLBatch, indices: Tensor, valid_count: int | None=None) -> MARLBatch
@@ -248,7 +248,7 @@ Returns:
 
 ## PreparedRollout
 
-[源码位置](../../marl/training/on_policy.py#L186) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L184) · [页内目录](#符号目录)
 
 `class PreparedRollout()`
 
@@ -261,7 +261,7 @@ detach；片段内部按时间反传，不实施 burn-in。迁移设备会转交
 
 ## PreparedRollout.__init__
 
-[源码位置](../../marl/training/on_policy.py#L193) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L191) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, batch: MARLBatch, *, policy_history: RecurrentState=None, value_history: RecurrentState=None) -> None
@@ -305,7 +305,7 @@ Returns:
 
 ## PreparedRollout.size
 
-[源码位置](../../marl/training/on_policy.py#L248) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L251) · [页内目录](#符号目录)
 
 ```python
 def size(self) -> int
@@ -325,7 +325,7 @@ Returns:
 
 ## PreparedRollout.consumed
 
-[源码位置](../../marl/training/on_policy.py#L261) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L264) · [页内目录](#符号目录)
 
 ```python
 def consumed(self) -> bool
@@ -345,7 +345,7 @@ Returns:
 
 ## PreparedRollout.to
 
-[源码位置](../../marl/training/on_policy.py#L272) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L275) · [页内目录](#符号目录)
 
 ```python
 def to(self, device: torch.device | str, *, non_blocking: bool=False) -> PreparedRollout
@@ -368,7 +368,7 @@ Returns:
 
 ## PreparedRollout.to.move
 
-[源码位置](../../marl/training/on_policy.py#L287) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L290) · [页内目录](#符号目录)
 
 ```python
 def move(t: Tensor) -> Tensor
@@ -388,7 +388,7 @@ Returns:
 
 ## PreparedRollout.validate_minibatches
 
-[源码位置](../../marl/training/on_policy.py#L306) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L309) · [页内目录](#符号目录)
 
 ```python
 def validate_minibatches(self, mini_batch_size: int, sequence_length: int | None) -> int
@@ -411,7 +411,7 @@ Returns:
 
 ## PreparedRollout._sequences
 
-[源码位置](../../marl/training/on_policy.py#L333) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L336) · [页内目录](#符号目录)
 
 ```python
 def _sequences(self, length: int) -> tuple[MARLBatch, list[int]]
@@ -433,7 +433,7 @@ Returns:
 
 ## PreparedRollout._sequences.chunks_of
 
-[源码位置](../../marl/training/on_policy.py#L349) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L352) · [页内目录](#符号目录)
 
 ```python
 def chunks_of(value: Tensor | None, fill: int=0) -> Tensor | None
@@ -454,7 +454,7 @@ Returns:
 
 ## PreparedRollout._sequences.initial
 
-[源码位置](../../marl/training/on_policy.py#L365) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L368) · [页内目录](#符号目录)
 
 ```python
 def initial(history: Tensor) -> Tensor
@@ -474,7 +474,7 @@ Returns:
 
 ## PreparedRollout.minibatches
 
-[源码位置](../../marl/training/on_policy.py#L409) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L412) · [页内目录](#符号目录)
 
 ```python
 def minibatches(self, *, epochs: int, mini_batch_size: int, generator: torch.Generator | None=None, sequence_length: int | None=None) -> Iterator[MARLBatch]
@@ -497,7 +497,7 @@ Returns:
 
 ## RolloutBuffer
 
-[源码位置](../../marl/training/on_policy.py#L452) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L455) · [页内目录](#符号目录)
 
 `class RolloutBuffer()`
 
@@ -507,7 +507,7 @@ Returns:
 
 ## RolloutBuffer.__init__
 
-[源码位置](../../marl/training/on_policy.py#L455) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L458) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, spec: EnvironmentSpec, *, horizon: int, num_envs: int, pin_memory: bool=False) -> None
@@ -530,7 +530,7 @@ Returns:
 
 ## RolloutBuffer._record_state
 
-[源码位置](../../marl/training/on_policy.py#L520) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L523) · [页内目录](#符号目录)
 
 ```python
 def _record_state(self, history: RecurrentState, state: RecurrentState) -> RecurrentState
@@ -551,7 +551,7 @@ Returns:
 
 ## RolloutBuffer._copy
 
-[源码位置](../../marl/training/on_policy.py#L554) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L557) · [页内目录](#符号目录)
 
 ```python
 def _copy(self, target: Tensor, value: Tensor, name: str) -> None
@@ -573,7 +573,7 @@ Returns:
 
 ## RolloutBuffer.add
 
-[源码位置](../../marl/training/on_policy.py#L570) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L573) · [页内目录](#符号目录)
 
 ```python
 def add(self, *, observations: Tensor, states: Tensor, actions: Tensor, rewards: Tensor, old_log_prob: Tensor, old_values: Tensor, terminated: Tensor, truncated: Tensor, action_masks: Tensor | None=None, policy_state: RecurrentState=None, value_state: RecurrentState=None) -> None
@@ -603,7 +603,7 @@ Returns:
 
 ## RolloutBuffer.finish
 
-[源码位置](../../marl/training/on_policy.py#L624) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L627) · [页内目录](#符号目录)
 
 ```python
 def finish(self, next_value: Tensor, estimator: AdvantageEstimator) -> PreparedRollout
@@ -624,7 +624,7 @@ Returns:
 
 ## RolloutBuffer.finish.layout
 
-[源码位置](../../marl/training/on_policy.py#L651) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L654) · [页内目录](#符号目录)
 
 ```python
 def layout(tensor: Tensor) -> Tensor
@@ -644,7 +644,7 @@ Returns:
 
 ## PPOUpdateConfig
 
-[源码位置](../../marl/training/on_policy.py#L695) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L698) · [页内目录](#符号目录)
 
 `class PPOUpdateConfig()`
 
@@ -669,7 +669,7 @@ sequence_length: int | None = None
 
 ## PPOUpdateConfig.__post_init__
 
-[源码位置](../../marl/training/on_policy.py#L707) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L710) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -689,7 +689,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_actor_learning_rate
 
-[源码位置](../../marl/training/on_policy.py#L741) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L744) · [页内目录](#符号目录)
 
 ```python
 def resolved_actor_learning_rate(self) -> float
@@ -709,7 +709,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_critic_learning_rate
 
-[源码位置](../../marl/training/on_policy.py#L753) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L756) · [页内目录](#符号目录)
 
 ```python
 def resolved_critic_learning_rate(self) -> float
@@ -729,7 +729,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_actor_max_grad_norm
 
-[源码位置](../../marl/training/on_policy.py#L765) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L768) · [页内目录](#符号目录)
 
 ```python
 def resolved_actor_max_grad_norm(self) -> float | None
@@ -749,7 +749,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_critic_max_grad_norm
 
-[源码位置](../../marl/training/on_policy.py#L779) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L782) · [页内目录](#符号目录)
 
 ```python
 def resolved_critic_max_grad_norm(self) -> float | None
@@ -769,7 +769,7 @@ Returns:
 
 ## OnPolicyTrainer
 
-[源码位置](../../marl/training/on_policy.py#L795) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L798) · [页内目录](#符号目录)
 
 `class OnPolicyTrainer()`
 
@@ -779,7 +779,7 @@ Returns:
 
 ## OnPolicyTrainer.__init__
 
-[源码位置](../../marl/training/on_policy.py#L798) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L801) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, environment: SyncVectorEnv, algorithm: OnPolicyActorCritic, estimator: AdvantageEstimator, rollout_horizon: int, optimization: OptimizerRuntime, *, device: torch.device | str='cpu', config_data: Mapping[str, object] | None=None) -> None
@@ -805,7 +805,7 @@ Returns:
 
 ## OnPolicyTrainer._tensors
 
-[源码位置](../../marl/training/on_policy.py#L833) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L836) · [页内目录](#符号目录)
 
 ```python
 def _tensors(self, steps: Sequence[EnvironmentStep]) -> tuple[Tensor, Tensor, Tensor | None]
@@ -825,7 +825,7 @@ Returns:
 
 ## OnPolicyTrainer.collect
 
-[源码位置](../../marl/training/on_policy.py#L848) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L851) · [页内目录](#符号目录)
 
 ```python
 def collect(self, seeds: list[int]) -> PreparedRollout
@@ -845,7 +845,7 @@ Returns:
 
 ## OnPolicyTrainer.train_rollout
 
-[源码位置](../../marl/training/on_policy.py#L941) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L944) · [页内目录](#符号目录)
 
 ```python
 def train_rollout(self, seeds: list[int]) -> dict[str, float]
@@ -865,7 +865,7 @@ Returns:
 
 ## OnPolicyTrainer.state_dict
 
-[源码位置](../../marl/training/on_policy.py#L956) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L959) · [页内目录](#符号目录)
 
 ```python
 def state_dict(self) -> dict[str, Any]
@@ -878,14 +878,14 @@ Inputs:
     无显式参数；读取当前实例字段。
 
 Returns:
-    schema 4 状态字典；不保存活跃环境、半段 rollout 或外部 seed 调度。
+    schema 5 状态字典；保存输入布局，不保存活跃环境、半段 rollout 或外部 seed 调度。
 ```
 
 <a id="onpolicytrainer-load_state_dict"></a>
 
 ## OnPolicyTrainer.load_state_dict
 
-[源码位置](../../marl/training/on_policy.py#L971) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L975) · [页内目录](#符号目录)
 
 ```python
 def load_state_dict(self, state: Mapping[str, Any]) -> None
@@ -905,7 +905,7 @@ Returns:
 
 ## OnPolicyTrainer.save_checkpoint
 
-[源码位置](../../marl/training/on_policy.py#L996) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1003) · [页内目录](#符号目录)
 
 ```python
 def save_checkpoint(self, path: str | Path) -> None
@@ -925,7 +925,7 @@ Returns:
 
 ## OnPolicyTrainer.load_checkpoint
 
-[源码位置](../../marl/training/on_policy.py#L1007) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1014) · [页内目录](#符号目录)
 
 ```python
 def load_checkpoint(self, path: str | Path, *, map_location: str | torch.device='cpu') -> None
@@ -946,7 +946,7 @@ Returns:
 
 ## RolloutConfig
 
-[源码位置](../../marl/training/on_policy.py#L1023) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1030) · [页内目录](#符号目录)
 
 `class RolloutConfig()`
 
@@ -962,7 +962,7 @@ horizon: int | None = None
 
 ## RolloutConfig.__post_init__
 
-[源码位置](../../marl/training/on_policy.py#L1026) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1033) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None

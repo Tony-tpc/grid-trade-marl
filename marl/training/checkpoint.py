@@ -9,13 +9,15 @@ from typing import Any, cast
 
 import torch
 
-TRAINER_CHECKPOINT_SCHEMA_VERSION = 4
+TRAINER_CHECKPOINT_SCHEMA_VERSION = 5
 
 
 def build_trainer_checkpoint_state(
     algorithm_state: Mapping[str, Any],
     config_data: Mapping[str, object] | None,
     optimization_state: Mapping[str, Any],
+    *,
+    input_spec: Mapping[str, object] | None = None,
 ) -> dict[str, Any]:
     """复制训练器共有的模型、配置、优化器与 Torch RNG 状态。
 
@@ -25,23 +27,28 @@ def build_trainer_checkpoint_state(
         algorithm_state: 模型 state_dict；校验函数中为可选的当前模型结构参考。
         config_data: 实验构造时生成的规范化配置快照；None 只与同为 None 的快照匹配。
         optimization_state: OptimizerRuntime.state_dict()，包含优化器和更新计数等状态。
+        input_spec: 环境尺寸、历史索引、state 节点和固定邻接的数据快照。
 
     Returns:
-        schema 4 的字典；不包含环境进度，replay/NumPy RNG 由离策略训练器补充。
+        schema 5 的字典；不包含环境进度，replay/NumPy RNG 由离策略训练器补充。
     """
 
     return {
         "schema_version": TRAINER_CHECKPOINT_SCHEMA_VERSION,
         "algorithm": deepcopy(dict(algorithm_state)),
         "config": deepcopy(dict(config_data)) if config_data is not None else None,
+        "input_spec": deepcopy(dict(input_spec)) if input_spec is not None else None,
         **capture_torch_rng_state(),
         "optimization": deepcopy(dict(optimization_state)),
     }
 
 
 def validate_trainer_checkpoint_state(
-    state: Mapping[str, Any], config_data: Mapping[str, object] | None, *,
+    state: Mapping[str, Any],
+    config_data: Mapping[str, object] | None,
+    *,
     algorithm_state: Mapping[str, Any] | None = None,
+    input_spec: Mapping[str, object] | None = None,
 ) -> None:
     """验证 schema/config；提供 algorithm_state 时额外校验参数名称、shape、dtype。
 
@@ -51,6 +58,7 @@ def validate_trainer_checkpoint_state(
         state: 待验证/恢复的 checkpoint 状态 Mapping；须来自兼容配置和 schema。
         config_data: 实验构造时生成的规范化配置快照；None 只与同为 None 的快照匹配。
         algorithm_state: 模型 state_dict；校验函数中为可选的当前模型结构参考。
+        input_spec: 当前环境布局快照；必须与 checkpoint 完全相同。
 
     Returns:
         None；不匹配抛 ValueError，不修改任何训练状态。
@@ -58,12 +66,14 @@ def validate_trainer_checkpoint_state(
 
     if state.get("schema_version") != TRAINER_CHECKPOINT_SCHEMA_VERSION:
         raise ValueError(
-            "不兼容的 trainer checkpoint：旧 schema 缺少新版 backbone/序列训练契约；"
+            "不兼容的 trainer checkpoint：旧 schema 缺少输入布局及新版网络契约；"
             "可显式加载 algorithm 权重用于评估/诊断，不支持静默精确续训"
         )
     expected = dict(config_data) if config_data is not None else None
     if state.get("config") != expected:
         raise ValueError("checkpoint config 与当前 trainer config 不一致")
+    if state.get("input_spec") != (dict(input_spec) if input_spec is not None else None):
+        raise ValueError("checkpoint input_spec/输入布局与当前环境不一致")
     if algorithm_state is not None:
         saved = state.get("algorithm")
         if not isinstance(saved, Mapping) or set(saved) != set(algorithm_state):
@@ -71,10 +81,23 @@ def validate_trainer_checkpoint_state(
         for name, current in algorithm_state.items():
             value = saved[name]
             if isinstance(current, torch.Tensor) and (
-                not isinstance(value, torch.Tensor) or current.shape != value.shape
+                not isinstance(value, torch.Tensor)
+                or current.shape != value.shape
                 or current.dtype != value.dtype
             ):
                 raise ValueError(f"checkpoint 网络参数 {name} 形状/dtype 与当前结构不一致")
+            if (
+                isinstance(current, torch.Tensor)
+                and name.rsplit(".", 1)[-1]
+                in {
+                    "history_indices",
+                    "current_indices",
+                    "node_indices",
+                    "adjacency",
+                }
+                and not torch.equal(current.cpu(), value.cpu())
+            ):
+                raise ValueError(f"checkpoint 静态布局 buffer {name} 与当前环境不一致")
 
 
 def capture_torch_rng_state() -> dict[str, object]:

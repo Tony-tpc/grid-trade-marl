@@ -146,7 +146,11 @@ def test_off_policy_trainer_updates_parameters_and_reports_metrics() -> None:
     config = replace(
         config,
         policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)),
-        critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
+        critic=AttentionQConfig(
+            embedding=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+            backbone=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+            attention_heads=4,
+        ),
         replay=ReplayConfig(capacity=8, batch_size=4),
         update=ActorCriticUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
     )

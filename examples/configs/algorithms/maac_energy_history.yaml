@@ -1,0 +1,23 @@
+# 网络路径验收示例；不声称论文数值复现。
+# 48 步、4 通道的布局来自能源 adapter；算法配置不重复填写尺寸。
+# LSTM 1 层、128 维是工程默认值，不是论文披露的网络参数。
+# actor 与 critic、各家庭编码器均独立训练；论文配置不启用 GNN。
+schema_version: 2
+algorithm: maac
+policy:
+  kind: independent_discrete
+  encoder:
+    kind: history
+    temporal: {kind: lstm, hidden_dim: 128, num_layers: 1}
+  backbone: {kind: mlp, hidden_dims: [128, 128], output_dim: 128, layer_norm: false}
+critic:
+  kind: attention_q
+  encoder:
+    kind: history
+    temporal: {kind: lstm, hidden_dim: 128, num_layers: 1}
+  graph: null
+  embedding: {kind: mlp, hidden_dims: [], output_dim: 128, layer_norm: false}
+  backbone: {kind: mlp, hidden_dims: [], output_dim: 128, layer_norm: false}
+  attention_heads: 4
+# 小 replay 只用于链路验收，正式实验需另定训练参数。
+replay: {capacity: 256, batch_size: 2}

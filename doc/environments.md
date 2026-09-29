@@ -19,11 +19,19 @@
 | 动作空间 | ActionKind.DISCRETE/CONTINUOUS | 离散 int64 [N]；连续 float [N,A] |
 | 个体还是共享收益 | RewardStructure | SHARED 要求每人奖励相同 |
 | 时间长度 | spec.horizon | 不能用一个 done 混淆终止和截断 |
-| 全局信息 | EnvironmentStep.state | 只进入集中式 critic，不泄漏给 actor |
+| 全局信息 | EnvironmentStep.state | 只进入集中式 critic/mixer，不泄漏给 actor |
+| 历史语义 | spec.observation_history | 显式 [W,C] 特征索引与当前特征索引 |
+| state 节点及图 | spec.state_layout、spec.adjacency | 节点数等于 N，固定非负有限邻接 |
 | 动作约束 | action_mask | 每个玩家至少一个 True；连续为 None |
 
 `validate_step` 检查形状、有限值、共享奖励一致性与 mask。它并不替代你对动作范围、
 所有 dtype、物理约束和数据泄漏的校验。
+
+历史/图布局的可运行声明与形状例子见[网络教程](networks.md)。
+普通 MLP 无需声明布局；不能根据 S=N×O 或扁平特征长度猜测时间或节点语义。
+窗口必须按真实时间顺序构造，索引校验无法识别业务上的未来数据泄漏；adapter 需明确
+窗口是否含当前时刻以及 episode 开始时怎样填充。修改索引会改变 checkpoint input_spec，
+即使观测总维度没变，也不能直接按原布局续训。
 
 ## 最小实现与运行
 

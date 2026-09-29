@@ -1,5 +1,9 @@
 # MAPPO 的 MLP / GRU / LSTM 配置与循环训练
 
+本页的“循环”指跨环境步传递 h/c 的 backbone。单条观测内的历史窗口编码是另一机制，
+五算法均可使用，见[网络教程](../doc/networks.md#time)。只有窗口编码、后接 MLP 时，
+无需循环 mini-batch。下面的实验结果保留原始日期与预算，不表示新网络配置已重新长训。
+
 ## 实现与数学语义审计
 
 | 要求 | 处理 |
@@ -78,7 +82,7 @@ update:
   sequence_length: 10
 ```
 
-训练 checkpoint 升级为 schema 4，旧 schema 不自动迁移。加载前校验配置和参数
+训练 checkpoint 当前为 schema 5，旧 schema 不自动迁移。新增输入布局快照，加载前校验配置和参数
 名称/形状/dtype；错误不会先修改网络或 RNG。旧实验保留，使用审计基线 commit
 724487d 的代码复现，不把模型权重单独加载当作精确续训。
 
@@ -101,7 +105,8 @@ MARLModelOutput 的 policy_state/value_state 是处理当前输入之后的状�
 下一步。仅需要动作时可用 algorithm.policy.act(..., hidden_state=...) 并保存其
 policy_state；MAPPO.act 的 Tensor-only 接口会拒绝循环 actor，防止每步失忆。
 
-sequence_length=null 在循环网络中使用整个 rollout；纯 MLP 不设置非空值。
+sequence_length=null 在跨步循环网络中使用整个 rollout；无跨步循环 backbone 时不设置非空值，
+即使 history encoder 使用 GRU/LSTM/Transformer 也一样。
 长度必须 <= horizon 且 <= mini_batch_size。mini_batch_size 按时间位置计数，不乘 N：
 长度 16、mini_batch_size 64 表示每次最多 4 条片段。horizon=25 时每个环境分成
 16+9，第二条右补 7 个位置。每 epoch 打乱片段，不打乱片段内部时间。
@@ -109,7 +114,7 @@ sequence_length=null 在循环网络中使用整个 rollout；纯 MLP 不设置�
 先按原始 [T,B,N] 计算 GAE/return，再分块。序列初态来自对应环境与片段起点，
 并在片段边界 detach；padding 从所有目标、诊断、target 统计及加权计数排除。
 Padding action mask 提供合法占位动作，不能先造出无效分布再期望 mask 消掉 NaN。
-纯 MLP 仍使用原有展平 mini-batch，既有网络参数布局与固定更新结果保持等价。
+无跨步循环 backbone 时仍使用展平 mini-batch；默认 MLP 的固定更新结果保持等价。
 
 ## 终止、评估与恢复
 
@@ -123,9 +128,14 @@ terminated 不 bootstrap；truncated 使用最终观测与携带的 critic 状�
 
 保存 checkpoint 时应完成此次更新。恢复模型、独立 optimizer、更新次数、实际
 optimizer-step 次数、normalization buffers、Torch RNG 和 mini-batch generator；
+当前 schema 5 还记录完整 input_spec，验证历史/节点索引、邻接及网络配置。schema 4
+及更早文件不能直接精确续训；后文历史实验的旧 checkpoint 不因文档更新而自动迁移。
 调用方仍需恢复下一次 reset seeds。基准保存自己的运行参数与 seed 调度。
 
 ## 固定预算验收和图表解释
+
+以下为 2026-09-27 循环 MAPPO 阶段的实验记录。保留当时的训练结果、测试数量和性能
+判断；统一窗口编码与静态图网络的当前验收见[网络配置说明](network_configuration.md)。
 
 ```powershell
 .\.venv\Scripts\python.exe -m benchmarks.benchmark_recurrent --output benchmark-results/recurrent_mappo_20k_10k_x3 --device cpu
@@ -226,7 +236,7 @@ good-agent 一列是两个 good-agent 的平均，不与对手合并；不是跨
 
 ## 尚未支持的边界
 
-不支持离策略 GRU/LSTM replay、跨 rollout 的环境/状态续接、部分环境 autoreset、
+不支持离策略跨环境步 GRU/LSTM replay、跨 rollout 的环境/状态续接、部分环境 autoreset、
 中途 checkpoint、burn-in、双向循环、LSTM projection 或循环 dropout。
 半段 rollout 不作为可恢复检查点；调用方在完整更新后恢复下一次 reset seeds。
 本次没有启动 100k×5 长实验，也没有为网络变体新增算法类或算法注册名。

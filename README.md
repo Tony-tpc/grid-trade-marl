@@ -15,7 +15,25 @@
                       Algorithm + optimizer + Trainer
 ```
 
-## 可配置循环 MAPPO
+## 统一网络配置与历史编码
+
+五种算法均支持独立窗口的 GRU/LSTM/Transformer 历史编码和可配置 MLP；
+集中式 critic 与 QMIX mixer 可选静态 GNN。默认网络保持原有 MLP 数值行为。
+[网络配置教程](doc/networks.md) · [配置契约与论文差距](docs/network_configuration.md) ·
+[能源 MAAC 48 步 LSTM 示例](examples/configs/algorithms/maac_energy_history.yaml)。
+该示例仍使用合成数据和量化动作，尚不是论文完整复现。
+
+| 能力 | MAPPO | MAAC / MADDPG / MASAC | QMIX |
+|---|---|---|---|
+| 局部观测历史 GRU/LSTM/Transformer | 支持 | 支持 | 支持 |
+| 跨环境步 GRU/LSTM backbone | actor、value critic 可分别配置 | 不支持 | 不支持 |
+| 静态 GNN | 集中式 value critic | 集中式 Q critic | mixer |
+
+历史编码每次从零状态处理完整窗口，窗口长度与特征排列由 adapter 声明；
+它不要求跨 transition 传递隐藏状态。Transformer 配在 `encoder.temporal`，GNN 配在
+`critic.graph` 或 `mixer.graph`，不能直接作为任意位置的 `backbone`。
+
+### 可配置循环 MAPPO
 
 MAPPO 的 actor、critic 可分别选择 MLP、GRU 或 LSTM，使用同一个算法类和更新入口。
 包含序列 mini-batch、隐藏状态传递、padding 屏蔽与完整 rollout 边界 checkpoint。
@@ -44,6 +62,15 @@ git 忽略的 `benchmark-results/`。
 算法配置使用 `--config`，环境配置使用 `--environment`。两份 YAML 独立：
 [算法与环境全部字段](examples/configs/README.md)。
 能源示例使用合成数据，验证训练链路；论文实验还需要真实数据、baseline 和多 seed 评估。
+默认能源命令使用 MLP。运行 48 步历史 LSTM 并保存完整 checkpoint：
+
+```powershell
+.\.venv\Scripts\python.exe examples\train_energy_maac.py --config examples\configs\algorithms\maac_energy_history.yaml --episodes 1 --num-envs 1 --device cpu --checkpoint .pytest_cache\energy-history.pt
+```
+
+历史示例的 1 层、128 维 LSTM 和小 replay 是工程验收设置。日初历史重复当天首值，
+没有接入真实跨日数据；四个历史通道共同输入一套局部 LSTM。
+
 非合作基准使用 Farama MPE2 的
 [simple_adversary_v3](https://mpe2.farama.org/environments/simple_adversary/)：
 MAAC/MAPPO 使用离散动作，MADDPG/MASAC 使用连续动作。QMIX 只支持共享团队奖励，
@@ -75,10 +102,11 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 |---|---|---|
 | `marl/algorithms/<algorithm>.py` | 算法 Config、loss 参数、组件装配、公式及更新顺序 | 调整算法组成和更新生命周期 |
 | `marl/modules/policy.py` | 多智能体策略、参数共享关系、对应 Config | 更换策略拓扑 |
-| `marl/modules/actor.py` | 单智能体 backbone + action head，采样和动作评估 | 修改单智能体执行组合 |
+| `marl/modules/actor.py` | 单智能体 encoder + backbone + action head，采样和动作评估 | 修改单智能体执行组合 |
+| `marl/modules/encoding.py` | 联合观测、联合动作及全局 state 的编码装配 | 修改集中式输入组合 |
 | `marl/modules/action_head.py` | 动作分布、mask、log-prob、entropy | 增加动作分布 |
 | `marl/modules/critic.py`、`mixer.py` | 价值网络与对应 Config | 更换 critic/mixer 网络 |
-| `marl/models/` | MLP、GRU、LSTM、GNN、Transformer 表示学习 | 换 backbone |
+| `marl/models/` | 窗口编码器及 MLP、GRU、LSTM、GNN、Transformer 表示学习 | 换编码器或 backbone |
 | `marl/objectives.py` | 纯数学目标与 `LossBundle` | 增加可复用目标函数 |
 | `marl/returns.py` | GAE、TD0 及配置、估计器能力协议 | 修改 advantage/target 估计 |
 | `marl/target_updates.py` | hard/soft target 更新及配置 | 修改目标网络同步 |
@@ -88,7 +116,7 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 | `marl/training/gradients.py` | 临时冻结网络参数但保留输入梯度 | 调整 actor/critic 梯度边界 |
 | `marl/runtime.py` | 设备选择、向量环境、TensorReplayBuffer | 修改运行设施 |
 | `marl/envs/` | 环境、adapter、EnvironmentSpec、独立环境配置 | 数据、奖励、物理规则、动作编码 |
-| `marl/core/` | MARLBatch、MARLModelOutput | 修改跨模块数据约定 |
+| `marl/core/` | MARLBatch、MARLModelOutput、循环状态、历史与节点布局 | 修改跨模块数据约定 |
 | `marl/config.py` | 安全 YAML 解析与配置序列化 | 新增 YAML 可选组件/算法 |
 | `marl/experiment.py` | 唯一实验装配入口 | 新增训练生命周期 |
 | `marl/extensions.py` | 外部组件的可选 ExtensionCatalog | 接入库外 Python 组件 |
@@ -100,9 +128,9 @@ MAPPO 需要可交互的环境来采集 fresh rollout。
 [算法概念与张量说明](marl/algorithms/README.md) ·
 [环境与 adapter 指南](marl/envs/README.md) · [后续开发约定](AGENTS.md)
 
-本轮接口、生命周期和扩展边界的审计结果见
-[代码审计与阅读说明](docs/code_audit_2026-09-27.md)。其中列出已清理接口、回归依据、
-Python 配置导入迁移及尚未支持的能力，不把工程测试通过解释成算法已收敛。
+早期接口与生命周期审计保留在
+[2026-09-27 代码审计](docs/code_audit_2026-09-27.md)，其能力判断属于当时快照。
+当前网络支持范围以[网络配置教程](doc/networks.md)为准；工程测试通过不代表算法已收敛。
 
 ## 调参数与替换组件
 
@@ -149,12 +177,14 @@ MADDPG 的 critic 暴露逐智能体 `critics`；MASAC 的 twin-Q 暴露 `first/
 
 新 objective 放进 `objectives.py`，然后在对应算法的 loss 配置和构造函数中接线。
 新 advantage/TD target 放进 `returns.py`，实现对应估计器接口，并在算法配置和
-YAML 解析分支中添加选择。更换 backbone 则修改或新增网络 Config 的 `build(spec)`。
+YAML 解析分支中添加选择。底层 backbone Config 使用 `build(input_dim)`，输入编码器
+Config 使用 `build(input_dim, layout)`；policy/critic/mixer Config 才使用 `build(spec)`。
 
 这类改动允许修改现有算法的少量组件接线。只有新机制确实需要不同前向或训练生命周期，
 才增加一个直接继承 `BaseMARLAlgorithm` 的算法类。新增算法文件同时包含其 Config，
 再更新公共导出、`AlgorithmConfig` union、YAML 解析和实验构建入口的类型声明。
-离策略算法只要满足现有 trainer 能力即可复用通用更新；新生命周期才新增 trainer 分支。
+离策略算法只要满足现有 trainer 能力即可复用通用更新；数据生命周期不同时才扩展 trainer，
+不得在 trainer 中增加按算法名称分支的更新逻辑。
 
 ### 外部组件目录
 
@@ -191,9 +221,9 @@ YAML 不能填写 Python 类路径，也不会触发动态导入或隐式全局�
 - terminated 阻止 bootstrap；truncated 保留当前 bootstrap，但停止跨 episode 的 GAE 递推。
 - shared reward 必须由环境明确声明；QMIX 不能用于一般和个体收益任务。
 
-内置 policy 是同构、固定智能体数；MAPPO 已支持 MLP/GRU/LSTM 的完整固定长度
-rollout 训练链。离策略循环 replay、跨 rollout 状态续接、GNN/Transformer 因果时序训练、
-混合动作与异构智能体仍不属于已实现能力。
+内置 policy 使用同构输入维度和固定智能体数。五算法已接通独立窗口历史编码，
+集中式网络可使用静态图；MAPPO 另有跨环境步循环训练链。离策略跨步循环 replay、
+跨 rollout 状态续接、动态通信图、混合动作与异构网络仍不属于已实现能力。
 
 ## Checkpoint 与验证
 
@@ -203,9 +233,11 @@ restored = build_experiment(env, config, seed=42)
 restored.trainer.load_checkpoint("checkpoints/run.pt")
 ```
 
-checkpoint 保存模型、optimizer、规范化 config 和更新计数；off-policy 还保存 replay、
-NumPy RNG，on-policy 保存 mini-batch generator；两者保存 Torch CPU/CUDA RNG。
-配置不一致会拒绝加载。恢复外部组件需要先用同一 catalog 解析配置，代码本身不写入 checkpoint。
+trainer checkpoint 使用 schema 5，保存模型、optimizer、规范化 config、
+`input_spec`（含历史索引、state 节点布局和静态邻接）及更新计数。off-policy 还保存
+replay、NumPy RNG，on-policy 保存 mini-batch generator；两者保存 Torch CPU/CUDA RNG。
+加载先验证 schema、配置、输入布局及模型参数/静态布局 buffer；旧 schema 不做部分恢复。
+恢复外部组件需要先用同一 catalog 解析配置，代码本身不写入 checkpoint。
 
 MAPPO 在完成一次更新后保存，恢复后按新的 reset seeds 采集下一份 rollout。
 checkpoint 不保存采样中的外部环境状态；离策略外部采样器的进度由实验代码管理。
@@ -214,6 +246,9 @@ checkpoint 不保存采样中的外部环境状态；离策略外部采样器的
 .\.venv\Scripts\python.exe -m pytest --basetemp=.pytest_cache/refactor-tmp
 .\.venv\Scripts\python.exe -m ruff check marl examples tests
 .\.venv\Scripts\python.exe -m mypy marl examples tests
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe doc\tools\build_api.py --check
+.\.venv\Scripts\python.exe doc\tools\check_docs.py
 git diff --check
 ```
 
@@ -226,4 +261,5 @@ git diff --check
 使用 `load_algorithm_config()`、算法专用 Config 与 `build_experiment()`。
 底层直接构造使用 `MAPPO(env.spec, MAPPOConfig())` 等形式。
 环境入口改为 `load_environment_config()`；示例参数改为 `--config`。
-旧 checkpoint 的 recipe 元数据不能用于新配置接口。
+旧网络顶层 `hidden_dim/layer_norm` 已移入嵌套配置且不保留别名，详见
+[配置迁移](docs/network_configuration.md)。schema 4 及更早 checkpoint 不能直接用于 schema 5 续训。

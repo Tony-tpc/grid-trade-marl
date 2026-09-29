@@ -1,4 +1,4 @@
-"""检查手册本地链接/锚点/源码行号以及算法、训练模块函数注释覆盖。"""
+"""检查仓库说明文档的本地链接/锚点/源码行号及算法、训练函数注释覆盖。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,16 @@ def main() -> None:
     """无参数；逐个检查本地链接和目标函数 docstring，发现错误以非零状态退出。"""
     failures: list[str] = []
     link_count = 0
-    pages = [*ROOT.glob("doc/**/*.md"), ROOT / "README.md"]
+    pages = sorted(
+        {
+            ROOT / "README.md",
+            *(
+                page
+                for folder in ("doc", "docs", "examples", "marl", "benchmarks")
+                for page in (ROOT / folder).rglob("*.md")
+            ),
+        }
+    )
     for page in pages:
         content = page.read_text(encoding="utf-8")
         # 代码块中的示意语法不是导航链接。

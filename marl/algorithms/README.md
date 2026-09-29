@@ -5,6 +5,9 @@
 建议先阅读 `base.py`，再按
 `MAPPO -> MADDPG -> MASAC -> QMIX -> MAAC` 的顺序阅读。
 
+五算法的 encoder/backbone 配置、历史窗口与跨步循环的区别、集中式 GNN 及参数共享
+关系见[网络教程](../../doc/networks.md)。各算法的动作空间、奖励和更新数学仍按本文说明。
+
 ## 1. 常用符号和张量形状
 
 | 符号 | 含义 | 典型张量 |

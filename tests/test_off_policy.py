@@ -17,6 +17,7 @@ from marl.envs import (
     Transition,
 )
 from marl.experiment import build_experiment
+from marl.models import MLPBackboneConfig
 from marl.modules.critic import IndependentQConfig
 from marl.modules.policy import IndependentDeterministicConfig
 from marl.target_updates import SoftTargetConfig
@@ -30,8 +31,8 @@ def spec() -> EnvironmentSpec:
 def training_config() -> MADDPGConfig:
     return replace(
         MADDPGConfig(),
-        policy=IndependentDeterministicConfig(hidden_dim=16),
-        critic=IndependentQConfig(hidden_dim=16),
+        policy=IndependentDeterministicConfig(backbone=MLPBackboneConfig(output_dim=16)),
+        critic=IndependentQConfig(backbone=MLPBackboneConfig(output_dim=16)),
         replay=ReplayConfig(capacity=4, batch_size=2),
         update=ActorCriticUpdateConfig(learning_rate=1e-3, max_grad_norm=0.5),
         target_update=SoftTargetConfig(tau=0.5),

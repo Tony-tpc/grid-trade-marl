@@ -22,11 +22,11 @@
 
 ## Actor
 
-[源码位置](../../marl/modules/actor.py#L10) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L11) · [页内目录](#符号目录)
 
 `class Actor(nn.Module)`
 
-单智能体策略网络：``observation -> backbone -> action head``。
+单智能体策略网络：``observation -> encoder -> backbone -> action head``。
 
 Actor 不知道智能体数量和参数共享关系；这些多智能体拓扑由
 :mod:`marl.modules.policy` 负责。输入 ``[..., O]``，输出动作、log-prob、
@@ -36,10 +36,10 @@ entropy 和分布参数；hidden_state 单独返回，不是分布参数。
 
 ## Actor.__init__
 
-[源码位置](../../marl/modules/actor.py#L18) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L19) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, backbone: BaseBackbone, action_head: BaseActionHead) -> None
+def __init__(self, backbone: BaseBackbone, action_head: BaseActionHead, encoder: InputEncoder | None=None) -> None
 ```
 
 构造 Actor，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -48,7 +48,7 @@ def __init__(self, backbone: BaseBackbone, action_head: BaseActionHead) -> None
 
 ## Actor._attach_hidden_state
 
-[源码位置](../../marl/modules/actor.py#L23) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L30) · [页内目录](#符号目录)
 
 ```python
 def _attach_hidden_state(result: ActionHeadOutput, hidden_state: RecurrentState) -> ActionHeadOutput
@@ -60,19 +60,19 @@ def _attach_hidden_state(result: ActionHeadOutput, hidden_state: RecurrentState)
 
 ## Actor._encode
 
-[源码位置](../../marl/modules/actor.py#L29) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L36) · [页内目录](#符号目录)
 
 ```python
 def _encode(self, observations: Tensor, hidden_state: RecurrentState, **kwargs: Tensor) -> BackboneOutput
 ```
 
-校验输入布局并调用 backbone，返回带 features 和隐藏状态的 BackboneOutput。
+校验输入，依次调用 encoder 与 backbone，返回带 features 和跨步隐藏状态的 BackboneOutput；窗口 encoder 本身不保存跨调用状态。
 
 <a id="actor-forward"></a>
 
 ## Actor.forward
 
-[源码位置](../../marl/modules/actor.py#L42) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L54) · [页内目录](#符号目录)
 
 ```python
 def forward(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, **backbone_kwargs: Tensor) -> ActionHeadOutput
@@ -84,7 +84,7 @@ def forward(self, observations: Tensor, *, deterministic: bool=False, action_mas
 
 ## Actor.evaluate_actions
 
-[源码位置](../../marl/modules/actor.py#L58) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L70) · [页内目录](#符号目录)
 
 ```python
 def evaluate_actions(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, **backbone_kwargs: Tensor) -> ActionHeadOutput
@@ -96,7 +96,7 @@ def evaluate_actions(self, observations: Tensor, actions: Tensor, *, action_mask
 
 ## Actor.discrete_logits
 
-[源码位置](../../marl/modules/actor.py#L75) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L85) · [页内目录](#符号目录)
 
 ```python
 def discrete_logits(self, observations: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, **backbone_kwargs: Tensor) -> Tensor

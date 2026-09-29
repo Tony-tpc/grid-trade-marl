@@ -32,7 +32,7 @@ EnvironmentStep 和 MARLBatch，因此以后换论文环境时不用改算法源
 
 ## ActionKind
 
-[源码位置](../../marl/envs/base.py#L21) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L22) · [页内目录](#符号目录)
 
 `class ActionKind(str, Enum)`
 
@@ -42,7 +42,7 @@ EnvironmentStep 和 MARLBatch，因此以后换论文环境时不用改算法源
 
 ## RewardStructure
 
-[源码位置](../../marl/envs/base.py#L26) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L27) · [页内目录](#符号目录)
 
 `class RewardStructure(str, Enum)`
 
@@ -52,7 +52,7 @@ EnvironmentStep 和 MARLBatch，因此以后换论文环境时不用改算法源
 
 ## EnvironmentSpec
 
-[源码位置](../../marl/envs/base.py#L34) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L35) · [页内目录](#符号目录)
 
 `class EnvironmentSpec()`
 
@@ -68,13 +68,16 @@ state_dim: int
 action_kind: ActionKind
 horizon: int
 reward_structure: RewardStructure = RewardStructure.INDIVIDUAL
+observation_history: HistoryLayout | None = None
+state_layout: StateLayout | None = None
+adjacency: tuple[tuple[float, ...], ...] | None = None
 ```
 
 <a id="environmentspec-__post_init__"></a>
 
 ## EnvironmentSpec.__post_init__
 
-[源码位置](../../marl/envs/base.py#L45) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L49) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -86,7 +89,7 @@ def __post_init__(self) -> None
 
 ## EnvironmentStep
 
-[源码位置](../../marl/envs/base.py#L52) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L72) · [页内目录](#符号目录)
 
 `class EnvironmentStep()`
 
@@ -108,7 +111,7 @@ info: dict[str, Any] = field(default_factory=dict)
 
 ## EnvironmentStep.done
 
-[源码位置](../../marl/envs/base.py#L64) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L84) · [页内目录](#符号目录)
 
 ```python
 def done(self) -> bool
@@ -120,7 +123,7 @@ def done(self) -> bool
 
 ## EnvironmentAdapter
 
-[源码位置](../../marl/envs/base.py#L68) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L88) · [页内目录](#符号目录)
 
 `class EnvironmentAdapter(ABC)`
 
@@ -130,7 +133,7 @@ def done(self) -> bool
 
 ## EnvironmentAdapter.validate_step
 
-[源码位置](../../marl/envs/base.py#L71) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L91) · [页内目录](#符号目录)
 
 ```python
 def validate_step(self, step: EnvironmentStep) -> EnvironmentStep
@@ -142,7 +145,7 @@ def validate_step(self, step: EnvironmentStep) -> EnvironmentStep
 
 ## EnvironmentAdapter.spec
 
-[源码位置](../../marl/envs/base.py#L102) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L122) · [页内目录](#符号目录)
 
 ```python
 def spec(self) -> EnvironmentSpec
@@ -154,7 +157,7 @@ def spec(self) -> EnvironmentSpec
 
 ## EnvironmentAdapter.reset
 
-[源码位置](../../marl/envs/base.py#L106) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L126) · [页内目录](#符号目录)
 
 ```python
 def reset(self, seed: int | None=None) -> EnvironmentStep
@@ -166,7 +169,7 @@ def reset(self, seed: int | None=None) -> EnvironmentStep
 
 ## EnvironmentAdapter.step
 
-[源码位置](../../marl/envs/base.py#L110) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L130) · [页内目录](#符号目录)
 
 ```python
 def step(self, actions: np.ndarray) -> EnvironmentStep
@@ -178,7 +181,7 @@ def step(self, actions: np.ndarray) -> EnvironmentStep
 
 ## Transition
 
-[源码位置](../../marl/envs/base.py#L115) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L135) · [页内目录](#符号目录)
 
 `class Transition()`
 
@@ -196,7 +199,7 @@ next: EnvironmentStep
 
 ## transitions_to_batch
 
-[源码位置](../../marl/envs/base.py#L123) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L143) · [页内目录](#符号目录)
 
 ```python
 def transitions_to_batch(transitions: list[Transition], device: torch.device | str='cpu') -> MARLBatch
@@ -211,7 +214,7 @@ def transitions_to_batch(transitions: list[Transition], device: torch.device | s
 
 ## transitions_to_batch.stack
 
-[源码位置](../../marl/envs/base.py#L135) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/base.py#L155) · [页内目录](#符号目录)
 
 ```python
 def stack(field_name: str, *, next_step: bool=False) -> Tensor

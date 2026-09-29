@@ -24,7 +24,7 @@ trainer 共享的 checkpoint 文件与 PyTorch RNG 状态工具。
 [源码位置](../../marl/training/checkpoint.py#L15) · [页内目录](#符号目录)
 
 ```python
-def build_trainer_checkpoint_state(algorithm_state: Mapping[str, Any], config_data: Mapping[str, object] | None, optimization_state: Mapping[str, Any]) -> dict[str, Any]
+def build_trainer_checkpoint_state(algorithm_state: Mapping[str, Any], config_data: Mapping[str, object] | None, optimization_state: Mapping[str, Any], *, input_spec: Mapping[str, object] | None=None) -> dict[str, Any]
 ```
 
 ```text
@@ -36,19 +36,20 @@ Args:
     algorithm_state: 模型 state_dict；校验函数中为可选的当前模型结构参考。
     config_data: 实验构造时生成的规范化配置快照；None 只与同为 None 的快照匹配。
     optimization_state: OptimizerRuntime.state_dict()，包含优化器和更新计数等状态。
+    input_spec: 环境尺寸、历史索引、state 节点和固定邻接的数据快照。
 
 Returns:
-    schema 4 的字典；不包含环境进度，replay/NumPy RNG 由离策略训练器补充。
+    schema 5 的字典；不包含环境进度，replay/NumPy RNG 由离策略训练器补充。
 ```
 
 <a id="validate_trainer_checkpoint_state"></a>
 
 ## validate_trainer_checkpoint_state
 
-[源码位置](../../marl/training/checkpoint.py#L42) · [页内目录](#符号目录)
+[源码位置](../../marl/training/checkpoint.py#L46) · [页内目录](#符号目录)
 
 ```python
-def validate_trainer_checkpoint_state(state: Mapping[str, Any], config_data: Mapping[str, object] | None, *, algorithm_state: Mapping[str, Any] | None=None) -> None
+def validate_trainer_checkpoint_state(state: Mapping[str, Any], config_data: Mapping[str, object] | None, *, algorithm_state: Mapping[str, Any] | None=None, input_spec: Mapping[str, object] | None=None) -> None
 ```
 
 ```text
@@ -60,6 +61,7 @@ Args:
     state: 待验证/恢复的 checkpoint 状态 Mapping；须来自兼容配置和 schema。
     config_data: 实验构造时生成的规范化配置快照；None 只与同为 None 的快照匹配。
     algorithm_state: 模型 state_dict；校验函数中为可选的当前模型结构参考。
+    input_spec: 当前环境布局快照；必须与 checkpoint 完全相同。
 
 Returns:
     None；不匹配抛 ValueError，不修改任何训练状态。
@@ -69,7 +71,7 @@ Returns:
 
 ## capture_torch_rng_state
 
-[源码位置](../../marl/training/checkpoint.py#L80) · [页内目录](#符号目录)
+[源码位置](../../marl/training/checkpoint.py#L103) · [页内目录](#符号目录)
 
 ```python
 def capture_torch_rng_state() -> dict[str, object]
@@ -91,7 +93,7 @@ Returns:
 
 ## restore_torch_rng_state
 
-[源码位置](../../marl/training/checkpoint.py#L102) · [页内目录](#符号目录)
+[源码位置](../../marl/training/checkpoint.py#L125) · [页内目录](#符号目录)
 
 ```python
 def restore_torch_rng_state(state: Mapping[str, Any]) -> None
@@ -113,7 +115,7 @@ Returns:
 
 ## save_checkpoint_state
 
-[源码位置](../../marl/training/checkpoint.py#L127) · [页内目录](#符号目录)
+[源码位置](../../marl/training/checkpoint.py#L150) · [页内目录](#符号目录)
 
 ```python
 def save_checkpoint_state(state: Mapping[str, Any], path: str | Path) -> None
@@ -136,7 +138,7 @@ Returns:
 
 ## load_checkpoint_state
 
-[源码位置](../../marl/training/checkpoint.py#L145) · [页内目录](#符号目录)
+[源码位置](../../marl/training/checkpoint.py#L168) · [页内目录](#符号目录)
 
 ```python
 def load_checkpoint_state(path: str | Path, *, map_location: str | torch.device='cpu') -> Mapping[str, Any]

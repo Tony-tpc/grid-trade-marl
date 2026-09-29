@@ -16,6 +16,7 @@ import torch
 from torch import Tensor
 
 from marl.core.batch import MARLBatch
+from marl.core.layout import HistoryLayout, StateLayout
 
 
 class ActionKind(str, Enum):
@@ -41,11 +42,30 @@ class EnvironmentSpec:
     action_kind: ActionKind
     horizon: int
     reward_structure: RewardStructure = RewardStructure.INDIVIDUAL
+    observation_history: HistoryLayout | None = None
+    state_layout: StateLayout | None = None
+    adjacency: tuple[tuple[float, ...], ...] | None = None
 
     def __post_init__(self) -> None:
         for name in ("num_agents", "observation_dim", "action_dim", "state_dim", "horizon"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} 必须大于 0")
+        if self.observation_history is not None:
+            self.observation_history.validate(self.observation_dim)
+        if self.state_layout is not None:
+            self.state_layout.validate(self.state_dim, self.num_agents)
+        if self.adjacency is not None:
+            if not isinstance(self.adjacency, tuple) or any(
+                not isinstance(row, tuple) for row in self.adjacency
+            ):
+                raise TypeError("adjacency 必须为不可变 tuple[tuple[float,...],...]")
+            adjacency = np.asarray(self.adjacency, dtype=float)
+            if (
+                adjacency.shape != (self.num_agents, self.num_agents)
+                or not np.isfinite(adjacency).all()
+                or (adjacency < 0).any()
+            ):
+                raise ValueError("adjacency 必须为有限非负 [N,N] 静态矩阵")
 
 
 @dataclass(slots=True)

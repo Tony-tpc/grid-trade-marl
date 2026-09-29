@@ -7,14 +7,14 @@
 | 路径 | 负责什么 | 入口与边界 |
 |---|---|---|
 | [marl](../marl) | 可安装的 Python 包 | [公共导出](../marl/__init__.py) |
-| [core](../marl/core) | 批次、模型输出、循环状态 | [MARLBatch](api/marl-core-batch.md)、[输出](api/marl-core-output.md)、[状态](api/marl-core-recurrent.md)；不放论文目标 |
+| [core](../marl/core) | 批次、模型输出、循环状态、静态布局 | [MARLBatch](api/marl-core-batch.md)、[输出](api/marl-core-output.md)、[状态](api/marl-core-recurrent.md)、[布局](api/marl-core-layout.md)；不放论文目标 |
 | [envs](../marl/envs) | 动力学、奖励、数据、动作编解码 | [接口](api/marl-envs-base.md)、[配置](api/marl-envs-config.md)；不放 loss/optimizer |
-| [models](../marl/models) | 特征提取 backbone | [MLP](api/marl-models-mlp.md)、[GRU](api/marl-models-gru.md)、[LSTM](api/marl-models-lstm.md)、[GNN](api/marl-models-gnn.md)、[Transformer](api/marl-models-transformer.md) |
+| [models](../marl/models) | 输入编码器与特征提取 backbone | [窗口编码](api/marl-models-encoder.md)、[MLP](api/marl-models-mlp.md)、[GRU](api/marl-models-gru.md)、[LSTM](api/marl-models-lstm.md)、[GNN](api/marl-models-gnn.md)、[Transformer](api/marl-models-transformer.md) |
 | [modules](../marl/modules) | 将特征变成动作、价值或团队 Q | [Actor](api/marl-modules-actor.md)、[Policy](api/marl-modules-policy.md)、[ActionHead](api/marl-modules-action_head.md)、[Critic](api/marl-modules-critic.md)、[Mixer](api/marl-modules-mixer.md) |
 | [algorithms](../marl/algorithms) | 算法配置、组件装配、公式接线与更新顺序 | [算法说明](algorithms.md)；具体类直接继承 BaseMARLAlgorithm |
 | [training](../marl/training) | 经验生命周期、训练状态、checkpoint | [训练模块](trainers.md)；不按算法名称分支 |
 | [examples](../examples) | 可运行入口和组件示例 | [minimal_usage](../examples/minimal_usage.py)、[custom_component](../examples/custom_component.py) |
-| [examples/configs/algorithms](../examples/configs/algorithms) | 每算法一份 YAML | [字段全集](../examples/configs/README.md)；没有环境维度 |
+| [examples/configs/algorithms](../examples/configs/algorithms) | 五份默认 YAML 及专项实验配置 | [字段全集](../examples/configs/README.md)；没有环境维度 |
 | [examples/configs/environments](../examples/configs/environments) | 环境独立配置 | 数据、玩家数、episode 长度从这里进入环境 |
 | [benchmarks](../benchmarks) | 固定预算训练、独立评估、cross-play、绘图 | [基准说明](../benchmarks/README.md) |
 | [tests](../tests) | 数学、形状、梯度、配置、恢复与回归 | [测试导航](training.md#verification) |
@@ -66,6 +66,17 @@ MAPPO：`sample` 输出动作、log-prob、value；环境执行后产生 reward�
 再更新 critic，有限 epoch 完成后废弃数据，下一轮重新采集。
 离策略则写入 replay，由 trainer 抽取历史 transition，算法计算带目标网络的 TD loss。
 
+## 网络内部的装配边界
+
+actor 使用局部 `encoder → backbone → action head`；集中式网络通过
+[encoding.py](api/marl-modules-encoding.md) 组合联合观测或显式 state 节点。图层只在
+critic/mixer 中读取多个节点。MADDPG/MASAC 联合输入顺序是“全部观测、全部动作”，
+编码器替换观测分支后仍保留动作梯度；不能改成逐体交错排列。
+
+时序输入布局来自 adapter。模型层的 encoder 按布局重排窗口，模块层决定节点/分支共享，
+算法层维持输出和目标函数，trainer 决定采样与更新生命周期。具体配置、参数归属和
+函数输入输出见[网络教程](networks.md)。
+
 ## 张量与对象词典
 
 B=环境/样本数，T=时间，N=智能体数，O=观测维，A=动作维或离散动作数，S=全局状态维，
@@ -89,3 +100,7 @@ K=循环层数，H=隐藏宽度。`...` 表示合法前置批维。
 循环 actor 状态 `[K,B,N,H]`、critic 状态 `[K,B,H]`，LSTM 各有 h/c。缓存保存处理当前
 观测**之前**的状态，输出是之后的状态。先按 `[T,B,N]` 算 GAE，再转为 `[B,T,N,...]`
 切片，不能打乱片段内部时间。
+
+窗口历史的 W 是另一维：局部 `[B,T,O]` 重排为 `[B,T,W,C]`，每个窗口编码后为
+`[B,T,H+P]`，P 是当前特征数。窗口之间不携带状态；仅后续跨步循环 backbone 使用上面
+的 h/c 契约。带历史编码的 MLP 网络仍使用独立 transition 或展平 rollout。

@@ -21,7 +21,7 @@ Smart Grid, 2021。论文第 II-IV 节说明设备、市场和 Markov game；第
 | 市场 | mid-market-rate (MMR) 本地买卖价，社区差额与供电商交易 |
 | 状态转移 | 电池 SoC、室内温度、智能电器不可中断工作周期 |
 | 奖励 | 负电费 + 舒适度惩罚 + EV 出行惩罚 + 配网峰值惩罚 |
-| episode | 48 个半小时交易时段，对应一天 |
+| episode | 默认 48 个半小时交易时段，对应有限单日 MDP；结束为 terminated=True、truncated=False |
 
 **本论文是个体收益博弈**：每户得到自己的 `r_i`，策略 `pi_i` 追求自己的 `J_i`。
 MAAC/MADDPG/MASAC/MAPPO 保留 `[B,N]` 的逐智能体奖励与价值；QMIX 要求
@@ -48,6 +48,22 @@ adapter = EnergyTradingAdapter(environment, ActionKind.DISCRETE)
 应只扩展环境参数和转移方程，不改算法对 `MARLBatch` 的读取方式。
 本实现没有加密通信或隐私保护协议；集中训练的 global state 会包含各家庭观测。
 当前示例适合少量家庭的接口验证，不代表已具备论文 300 户的计算扩展性。
+
+### 历史窗口与网络的接口
+
+当前 `observe()` 输出顺序为“时段、购电价历史、售电价历史、PV 历史、需求历史、
+10 项当前设备/环境特征”，单体维度 `O=4*history_steps+11`。窗口包含当前时刻及过去
+W−1 步，日初不足部分重复当天首值，不提供真实跨日历史。
+
+adapter 用 `EnvironmentSpec.observation_history` 声明如何重排为 `[W,4]`，并用
+`state_layout` 声明联合 state 的节点索引。算法 YAML 只选择编码网络，不重复写窗口尺寸。
+默认网络仍把整条观测输入 MLP；[历史 MAAC 配置](../../examples/configs/algorithms/maac_energy_history.yaml)
+改为每个局部编码器的一套 LSTM 共同处理四个通道，取最后输出再拼接 11 项当前特征。
+actor 与 critic 编码独立，1 层、128 维为工程设置。完整代码与实际更新命令见
+[网络教程](../../doc/networks.md)。
+
+接入真实多日数据时还需明确跨日窗口、训练/测试划分及 episode 终止定义，不能只替换
+数组后就声称满足论文的数据和 bootstrap 语义。
 
 可运行示例把环境参数独立保存在
 [`examples/configs/environments/energy_trading.yaml`](../../examples/configs/environments/energy_trading.yaml)。

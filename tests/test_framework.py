@@ -35,7 +35,7 @@ def test_all_backbones_follow_shape_contract() -> None:
     observations = torch.randn(4, 3, 6)
     assert MLPBackbone(6, output_dim=16)(observations).features.shape == (4, 3, 16)
     assert TransformerBackbone(6, model_dim=16)(observations).features.shape == (4, 3, 16)
-    adjacency = torch.ones(4, 3, 3)
+    adjacency = torch.ones(3, 3)  # 本轮图网络只接受固定图。
     assert GNNBackbone(6, hidden_dim=16)(observations, adjacency=adjacency).features.shape == (
         4,
         3,

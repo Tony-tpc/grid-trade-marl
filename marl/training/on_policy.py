@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -74,9 +74,7 @@ class OnPolicyActorCritic(Protocol):
         """
         ...
 
-    def update(
-        self, experience: PreparedRollout, runtime: OptimizerRuntime
-    ) -> dict[str, float]:
+    def update(self, experience: PreparedRollout, runtime: OptimizerRuntime) -> dict[str, float]:
         """声明消费 fresh rollout 并执行算法专用更新的能力。
 
         Args:
@@ -220,8 +218,10 @@ class PreparedRollout:
             raise ValueError("PreparedRollout 必须是未补齐的原始 rollout，不能重包装片段")
         if self.recurrent:
             for name, history, dimensions in (
-                ("policy", policy_history, 5), ("value", value_history, 4),
+                ("policy", policy_history, 5),
+                ("value", value_history, 4),
             ):
+
                 def check(tensor: Tensor, name: str = name, dimensions: int = dimensions) -> Tensor:
                     """验证单个 h/c 历史张量的维数及 T/B/N 与 rollout 一致。
 
@@ -233,12 +233,15 @@ class PreparedRollout:
                     Returns:
                         原 Tensor；形状不符抛 ValueError。
                     """
-                    if (tensor.ndim != dimensions or
-                        tensor.shape[0] != batch.observations.shape[1] or
-                        tensor.shape[2] != batch.observations.shape[0] or
-                        (name == "policy" and tensor.shape[3] != batch.observations.shape[2])):
+                    if (
+                        tensor.ndim != dimensions
+                        or tensor.shape[0] != batch.observations.shape[1]
+                        or tensor.shape[2] != batch.observations.shape[0]
+                        or (name == "policy" and tensor.shape[3] != batch.observations.shape[2])
+                    ):
                         raise ValueError(f"{name} 历史必须是 [T,K,B,(N),H]，与 rollout 一致")
                     return tensor
+
                 map_state(history, check)
         self.batch = batch
         self.policy_history, self.value_history = policy_history, value_history
@@ -960,12 +963,13 @@ class OnPolicyTrainer:
             无显式参数；读取当前实例字段。
 
         Returns:
-            schema 4 状态字典；不保存活跃环境、半段 rollout 或外部 seed 调度。
+            schema 5 状态字典；保存输入布局，不保存活跃环境、半段 rollout 或外部 seed 调度。
         """
         return build_trainer_checkpoint_state(
             self.algorithm.state_dict(),
             self.config_data,
             self.optimization.state_dict(),
+            input_spec=asdict(self.environment.spec),
         )
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
@@ -978,7 +982,10 @@ class OnPolicyTrainer:
             None；仅支持完整 rollout 更新后的 checkpoint 恢复。
         """
         validate_trainer_checkpoint_state(
-            state, self.config_data, algorithm_state=self.algorithm.state_dict(),
+            state,
+            self.config_data,
+            algorithm_state=self.algorithm.state_dict(),
+            input_spec=asdict(self.environment.spec),
         )
         # schema/config/网络形状已预检。对 optimizer/RNG 等损坏载荷提供事务回滚：
         # PyTorch 的 load_state_dict 可能先修改部分对象再抛错，不能留下半恢复状态。

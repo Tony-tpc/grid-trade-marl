@@ -48,17 +48,15 @@
 - [AttentionQConfig.__post_init__](#attentionqconfig-__post_init__)
 - [AttentionQConfig.build](#attentionqconfig-build)
 - [IndependentQConfig](#independentqconfig)
-- [IndependentQConfig.__post_init__](#independentqconfig-__post_init__)
 - [IndependentQConfig.build](#independentqconfig-build)
 - [TwinQConfig](#twinqconfig)
-- [TwinQConfig.__post_init__](#twinqconfig-__post_init__)
 - [TwinQConfig.build](#twinqconfig-build)
 
 <a id="centralized_critic_input"></a>
 
 ## centralized_critic_input
 
-[源码位置](../../marl/modules/critic.py#L18) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L31) · [页内目录](#符号目录)
 
 ```python
 def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor
@@ -70,7 +68,7 @@ def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor
 
 ## ValueNetwork
 
-[源码位置](../../marl/modules/critic.py#L31) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L44) · [页内目录](#符号目录)
 
 `class ValueNetwork(Protocol)`
 
@@ -80,7 +78,7 @@ def centralized_critic_input(observations: Tensor, actions: Tensor) -> Tensor
 
 ## ValueNetwork.__call__
 
-[源码位置](../../marl/modules/critic.py#L32) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L45) · [页内目录](#符号目录)
 
 ```python
 def __call__(self, inputs: Tensor) -> Tensor
@@ -92,7 +90,7 @@ def __call__(self, inputs: Tensor) -> Tensor
 
 ## ValueNetwork.parameters
 
-[源码位置](../../marl/modules/critic.py#L33) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L46) · [页内目录](#符号目录)
 
 ```python
 def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
@@ -104,7 +102,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## RecurrentValueNetwork
 
-[源码位置](../../marl/modules/critic.py#L37) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L50) · [页内目录](#符号目录)
 
 `class RecurrentValueNetwork(Protocol)`
 
@@ -120,7 +118,7 @@ is_recurrent: bool
 
 ## RecurrentValueNetwork.__call__
 
-[源码位置](../../marl/modules/critic.py#L42) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L55) · [页内目录](#符号目录)
 
 ```python
 def __call__(self, inputs: Tensor, *, hidden_state: RecurrentState=None, return_state: Literal[True]) -> tuple[Tensor, RecurrentState]
@@ -132,7 +130,7 @@ def __call__(self, inputs: Tensor, *, hidden_state: RecurrentState=None, return_
 
 ## AttentionQNetwork
 
-[源码位置](../../marl/modules/critic.py#L49) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L65) · [页内目录](#符号目录)
 
 `class AttentionQNetwork(Protocol)`
 
@@ -142,7 +140,7 @@ def __call__(self, inputs: Tensor, *, hidden_state: RecurrentState=None, return_
 
 ## AttentionQNetwork.__call__
 
-[源码位置](../../marl/modules/critic.py#L50) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L66) · [页内目录](#符号目录)
 
 ```python
 def __call__(self, observations: Tensor, actions: Tensor) -> Tensor
@@ -154,7 +152,7 @@ def __call__(self, observations: Tensor, actions: Tensor) -> Tensor
 
 ## AttentionQNetwork.parameters
 
-[源码位置](../../marl/modules/critic.py#L51) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L67) · [页内目录](#符号目录)
 
 ```python
 def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
@@ -166,7 +164,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## QEnsemble
 
-[源码位置](../../marl/modules/critic.py#L55) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L71) · [页内目录](#符号目录)
 
 `class QEnsemble(ValueNetwork, Protocol)`
 
@@ -176,7 +174,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## QEnsemble.critics
 
-[源码位置](../../marl/modules/critic.py#L57) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L73) · [页内目录](#符号目录)
 
 ```python
 def critics(self) -> nn.ModuleList
@@ -188,7 +186,7 @@ def critics(self) -> nn.ModuleList
 
 ## TwinQEnsemble
 
-[源码位置](../../marl/modules/critic.py#L61) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L77) · [页内目录](#符号目录)
 
 `class TwinQEnsemble(Protocol)`
 
@@ -198,7 +196,7 @@ def critics(self) -> nn.ModuleList
 
 ## TwinQEnsemble.first
 
-[源码位置](../../marl/modules/critic.py#L63) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L79) · [页内目录](#符号目录)
 
 ```python
 def first(self) -> QEnsemble
@@ -210,7 +208,7 @@ def first(self) -> QEnsemble
 
 ## TwinQEnsemble.second
 
-[源码位置](../../marl/modules/critic.py#L66) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L82) · [页内目录](#符号目录)
 
 ```python
 def second(self) -> QEnsemble
@@ -222,7 +220,7 @@ def second(self) -> QEnsemble
 
 ## TwinQEnsemble.__call__
 
-[源码位置](../../marl/modules/critic.py#L68) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L84) · [页内目录](#符号目录)
 
 ```python
 def __call__(self, inputs: Tensor) -> tuple[Tensor, Tensor]
@@ -234,7 +232,7 @@ def __call__(self, inputs: Tensor) -> tuple[Tensor, Tensor]
 
 ## TwinQEnsemble.parameters
 
-[源码位置](../../marl/modules/critic.py#L69) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L85) · [页内目录](#符号目录)
 
 ```python
 def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
@@ -246,7 +244,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## ValueCritic
 
-[源码位置](../../marl/modules/critic.py#L72) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L88) · [页内目录](#符号目录)
 
 `class ValueCritic(nn.Module)`
 
@@ -256,7 +254,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## ValueCritic.__init__
 
-[源码位置](../../marl/modules/critic.py#L75) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L91) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, backbone: BaseBackbone) -> None
@@ -268,7 +266,7 @@ def __init__(self, backbone: BaseBackbone) -> None
 
 ## ValueCritic.forward
 
-[源码位置](../../marl/modules/critic.py#L80) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L96) · [页内目录](#符号目录)
 
 ```python
 def forward(self, inputs: Tensor, **backbone_kwargs: Tensor) -> Tensor
@@ -280,7 +278,7 @@ def forward(self, inputs: Tensor, **backbone_kwargs: Tensor) -> Tensor
 
 ## CentralizedCritic
 
-[源码位置](../../marl/modules/critic.py#L86) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L102) · [页内目录](#符号目录)
 
 `class CentralizedCritic(nn.Module)`
 
@@ -293,10 +291,10 @@ critic 猜测各算法不同的数据布局。
 
 ## CentralizedCritic.__init__
 
-[源码位置](../../marl/modules/critic.py#L93) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L109) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, backbone: BaseBackbone, output_dim: int=1) -> None
+def __init__(self, backbone: BaseBackbone, output_dim: int=1, encoder: InputEncoder | None=None) -> None
 ```
 
 构造 CentralizedCritic，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -305,7 +303,7 @@ def __init__(self, backbone: BaseBackbone, output_dim: int=1) -> None
 
 ## CentralizedCritic.initial_state
 
-[源码位置](../../marl/modules/critic.py#L100) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L119) · [页内目录](#符号目录)
 
 ```python
 def initial_state(self, batch_size: int) -> RecurrentState
@@ -317,7 +315,7 @@ def initial_state(self, batch_size: int) -> RecurrentState
 
 ## CentralizedCritic.forward
 
-[源码位置](../../marl/modules/critic.py#L115) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L140) · [页内目录](#符号目录)
 
 ```python
 def forward(self, centralized_input: Tensor, *, hidden_state: RecurrentState=None, return_state: bool=False) -> Tensor | tuple[Tensor, RecurrentState]
@@ -329,7 +327,7 @@ def forward(self, centralized_input: Tensor, *, hidden_state: RecurrentState=Non
 
 ## IndependentCentralizedCritics
 
-[源码位置](../../marl/modules/critic.py#L131) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L160) · [页内目录](#符号目录)
 
 `class IndependentCentralizedCritics(nn.Module)`
 
@@ -339,10 +337,10 @@ def forward(self, centralized_input: Tensor, *, hidden_state: RecurrentState=Non
 
 ## IndependentCentralizedCritics.__init__
 
-[源码位置](../../marl/modules/critic.py#L134) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L163) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool=False) -> None
+def __init__(self, spec: EnvironmentSpec, backbone: MLPBackboneConfig=_DEFAULT_BACKBONE, encoder: EncoderConfig=_DEFAULT_ENCODER, graph: GNNBackboneConfig | None=None) -> None
 ```
 
 构造 IndependentCentralizedCritics，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -351,7 +349,7 @@ def __init__(self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm:
 
 ## IndependentCentralizedCritics.forward
 
-[源码位置](../../marl/modules/critic.py#L143) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L180) · [页内目录](#符号目录)
 
 ```python
 def forward(self, centralized_input: Tensor) -> Tensor
@@ -363,7 +361,7 @@ def forward(self, centralized_input: Tensor) -> Tensor
 
 ## TwinIndependentCentralizedCritics
 
-[源码位置](../../marl/modules/critic.py#L150) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L187) · [页内目录](#符号目录)
 
 `class TwinIndependentCentralizedCritics(nn.Module)`
 
@@ -373,10 +371,10 @@ MASAC 使用的两组独立集中式 Q 网络。
 
 ## TwinIndependentCentralizedCritics.__init__
 
-[源码位置](../../marl/modules/critic.py#L153) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L190) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm: bool=False) -> None
+def __init__(self, spec: EnvironmentSpec, backbone: MLPBackboneConfig=_DEFAULT_BACKBONE, encoder: EncoderConfig=_DEFAULT_ENCODER, graph: GNNBackboneConfig | None=None) -> None
 ```
 
 构造 TwinIndependentCentralizedCritics，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -385,7 +383,7 @@ def __init__(self, num_agents: int, input_dim: int, hidden_dim: int, layer_norm:
 
 ## TwinIndependentCentralizedCritics.forward
 
-[源码位置](../../marl/modules/critic.py#L160) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L201) · [页内目录](#符号目录)
 
 ```python
 def forward(self, centralized_input: Tensor) -> tuple[Tensor, Tensor]
@@ -397,7 +395,7 @@ def forward(self, centralized_input: Tensor) -> tuple[Tensor, Tensor]
 
 ## AttentionCritic
 
-[源码位置](../../marl/modules/critic.py#L164) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L205) · [页内目录](#符号目录)
 
 `class AttentionCritic(nn.Module)`
 
@@ -412,10 +410,10 @@ MAAC 的逐智能体离散候选 Q 网络。
 
 ## AttentionCritic.__init__
 
-[源码位置](../../marl/modules/critic.py#L173) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L214) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int, attention_heads: int, layer_norm: bool=False) -> None
+def __init__(self, spec: EnvironmentSpec, embedding: MLPBackboneConfig=_DEFAULT_EMBEDDING, backbone: MLPBackboneConfig=_DEFAULT_EMBEDDING, encoder: EncoderConfig=_DEFAULT_ENCODER, attention_heads: int=4, graph: GNNBackboneConfig | None=None) -> None
 ```
 
 构造 AttentionCritic，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -424,7 +422,7 @@ def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidde
 
 ## AttentionCritic.forward
 
-[源码位置](../../marl/modules/critic.py#L218) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L262) · [页内目录](#符号目录)
 
 ```python
 def forward(self, observations: Tensor, actions: Tensor) -> Tensor
@@ -436,7 +434,7 @@ def forward(self, observations: Tensor, actions: Tensor) -> Tensor
 
 ## CentralizedValueConfig
 
-[源码位置](../../marl/modules/critic.py#L270) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L312) · [页内目录](#符号目录)
 
 `class CentralizedValueConfig()`
 
@@ -447,13 +445,15 @@ def forward(self, observations: Tensor, actions: Tensor) -> Tensor
 ```python
 kind: Literal['centralized_value'] = 'centralized_value'
 backbone: BackboneConfig = MLPBackboneConfig()
+encoder: EncoderConfig = IdentityEncoderConfig()
+graph: GNNBackboneConfig | None = None
 ```
 
 <a id="centralizedvalueconfig-build"></a>
 
 ## CentralizedValueConfig.build
 
-[源码位置](../../marl/modules/critic.py#L274) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L318) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> CentralizedCritic
@@ -465,7 +465,7 @@ def build(self, spec: EnvironmentSpec) -> CentralizedCritic
 
 ## AttentionQConfig
 
-[源码位置](../../marl/modules/critic.py#L282) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L332) · [页内目录](#符号目录)
 
 `class AttentionQConfig()`
 
@@ -475,16 +475,18 @@ def build(self, spec: EnvironmentSpec) -> CentralizedCritic
 
 ```python
 kind: Literal['attention_q'] = 'attention_q'
-hidden_dim: int = 128
+encoder: EncoderConfig = IdentityEncoderConfig()
+embedding: MLPBackboneConfig = MLPBackboneConfig(hidden_dims=())
+backbone: MLPBackboneConfig = MLPBackboneConfig(hidden_dims=())
+graph: GNNBackboneConfig | None = None
 attention_heads: int = 4
-layer_norm: bool = False
 ```
 
 <a id="attentionqconfig-__post_init__"></a>
 
 ## AttentionQConfig.__post_init__
 
-[源码位置](../../marl/modules/critic.py#L288) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L340) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -496,7 +498,7 @@ def __post_init__(self) -> None
 
 ## AttentionQConfig.build
 
-[源码位置](../../marl/modules/critic.py#L294) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L348) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> AttentionCritic
@@ -508,7 +510,7 @@ def build(self, spec: EnvironmentSpec) -> AttentionCritic
 
 ## IndependentQConfig
 
-[源码位置](../../marl/modules/critic.py#L306) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L360) · [页内目录](#符号目录)
 
 `class IndependentQConfig()`
 
@@ -518,27 +520,16 @@ def build(self, spec: EnvironmentSpec) -> AttentionCritic
 
 ```python
 kind: Literal['independent_centralized_q'] = 'independent_centralized_q'
-hidden_dim: int = 128
-layer_norm: bool = False
+encoder: EncoderConfig = IdentityEncoderConfig()
+backbone: MLPBackboneConfig = MLPBackboneConfig()
+graph: GNNBackboneConfig | None = None
 ```
-
-<a id="independentqconfig-__post_init__"></a>
-
-## IndependentQConfig.__post_init__
-
-[源码位置](../../marl/modules/critic.py#L311) · [页内目录](#符号目录)
-
-```python
-def __post_init__(self) -> None
-```
-
-在 IndependentQConfig 数据类构造后校验字段范围/一致性；返回 None，非法配置立即报错。
 
 <a id="independentqconfig-build"></a>
 
 ## IndependentQConfig.build
 
-[源码位置](../../marl/modules/critic.py#L315) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L366) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> IndependentCentralizedCritics
@@ -550,7 +541,7 @@ def build(self, spec: EnvironmentSpec) -> IndependentCentralizedCritics
 
 ## TwinQConfig
 
-[源码位置](../../marl/modules/critic.py#L325) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L376) · [页内目录](#符号目录)
 
 `class TwinQConfig()`
 
@@ -560,27 +551,16 @@ def build(self, spec: EnvironmentSpec) -> IndependentCentralizedCritics
 
 ```python
 kind: Literal['twin_independent_centralized_q'] = 'twin_independent_centralized_q'
-hidden_dim: int = 128
-layer_norm: bool = False
+encoder: EncoderConfig = IdentityEncoderConfig()
+backbone: MLPBackboneConfig = MLPBackboneConfig()
+graph: GNNBackboneConfig | None = None
 ```
-
-<a id="twinqconfig-__post_init__"></a>
-
-## TwinQConfig.__post_init__
-
-[源码位置](../../marl/modules/critic.py#L330) · [页内目录](#符号目录)
-
-```python
-def __post_init__(self) -> None
-```
-
-在 TwinQConfig 数据类构造后校验字段范围/一致性；返回 None，非法配置立即报错。
 
 <a id="twinqconfig-build"></a>
 
 ## TwinQConfig.build
 
-[源码位置](../../marl/modules/critic.py#L334) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/critic.py#L382) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> TwinIndependentCentralizedCritics

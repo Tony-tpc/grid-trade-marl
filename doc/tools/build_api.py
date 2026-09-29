@@ -12,6 +12,44 @@ DEST = ROOT / "doc/api"
 # 手写补充用于核心算法/训练以外尚未逐参数展开 docstring 的接口。
 # key 是完整符号名；原有 docstring 优先，签名与字段始终来自当前 AST。
 DESCRIPTIONS = {
+    "InputEncoder.__init__": (
+        "记录 input_dim/output_dim，初始化 nn.Module；不分配学习参数，不返回特征。"
+    ),
+    "IdentityEncoder.__init__": "输入 input_dim，建立输入输出同宽的无参数编码器。",
+    "IdentityEncoderConfig.build": (
+        "输入 input_dim 与可选 layout，返回新 IdentityEncoder；不使用布局，不创建参数。"
+    ),
+    "HistoryEncoder.__init__": (
+        "输入 input_dim、HistoryLayout 和 temporal Config；验证索引完整覆盖后创建时序网络，"
+        "注册历史/当前索引 buffer，输出宽度为时序隐藏宽度加当前特征数。返回 None。"
+    ),
+    "HistoryEncoderConfig.build": (
+        "输入 input_dim 和 HistoryLayout，返回新 HistoryEncoder；layout=None 报错。"
+        "创建独立参数，每次 forward 从零状态处理完整窗口。"
+    ),
+    "HistoryEncoderConfig.__post_init__": (
+        "验证 temporal 是 GRU/LSTM/Transformer Config；非法类型抛 TypeError，返回 None。"
+    ),
+    "ObservationEncoder.__init__": (
+        "输入 EnvironmentSpec、encoder 与可选 graph Config；创建 N 个独立局部编码器，"
+        "可选共享图层及邻接 buffer。forward 接收 [...,N,O]，输出 [...,N,E]。"
+    ),
+    "JointActionEncoder.__init__": (
+        "输入 spec、encoder 与可选 graph Config；装配联合观测编码器，保留全部动作分支。"
+        "输入按全部观测后接全部动作排列，宽度 N*(O+A)，输出宽度 N*(E+A)。"
+    ),
+    "StateEncoder.__init__": (
+        "输入 spec、encoder 与可选 graph Config；要求 state_layout，创建节点间共享的局部"
+        "编码器及可选图层，注册节点/当前索引与邻接 buffer。输出宽度 N*E+G。"
+    ),
+    "QMixerConfig.build": (
+        "输入 EnvironmentSpec，创建 state 编码、权重超网络及 value 分支并返回 QMixer；"
+        "局部 Q 数量来自 N，状态维度来自 S，不增加共享的全局注册状态。"
+    ),
+    "QMixer.forward": (
+        "输入 agent_q_values [...,N] 和同批维 state [...,S]，编码 state 后生成非负混合权重，"
+        "返回团队 Q [...,1]；校验批维和末维，保留计算图但不更新参数。"
+    ),
     "config_to_dict.encode": (
         "递归把 dataclass、Enum、dtype、外部配置等转成可序列化值，返回规"
         "范化数据。"
@@ -130,7 +168,10 @@ DESCRIPTIONS = {
         "将 backbone 输出的新状态写入动作输出的 hidden_state，返回该动作"
         "输出。"
     ),
-    "Actor._encode": "校验输入布局并调用 backbone，返回带 features 和隐藏状态的 BackboneOutput。",
+    "Actor._encode": (
+        "校验输入，依次调用 encoder 与 backbone，返回带 features 和跨步隐藏状态的"
+        " BackboneOutput；窗口 encoder 本身不保存跨调用状态。"
+    ),
     "QEnsemble.critics": "返回逐智能体独立 critic 序列，供算法仅对选定玩家动作保留梯度。",
     "TwinQEnsemble.first": "返回第一组独立集中式 critic。",
     "TwinQEnsemble.second": "返回第二组独立集中式 critic，与第一组参数独立。",

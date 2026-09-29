@@ -40,8 +40,16 @@ config = MAPPOConfig(
 .\.venv\Scripts\python.exe doc\examples\train_walkthrough.py --algorithm mappo --recurrent
 ```
 
-当前 BackboneConfig union/YAML 只支持 MLP/GRU/LSTM。虽然仓库有 GNN/Transformer 类，
-图结构和因果时序并未自动接入训练，不能直接把 kind 换成 gnn/transformer 后宣称支持。
+五算法共享 encoder → backbone → 输出头约定。历史 GRU/LSTM/Transformer 放在
+encoder.temporal；跨环境步 GRU/LSTM backbone 仅 MAPPO 支持。
+集中式 critic/mixer 可配置 graph: GNN。窗口与节点尺寸由 EnvironmentSpec 显式声明，
+actor 不读取邻居。完整参数、布局例子和能源 48 步验收见
+[统一网络配置](../docs/network_configuration.md)。
+
+底层 backbone Config 使用 `build(input_dim)`，encoder Config 使用
+`build(input_dim, layout)`；policy/critic/mixer Config 使用 `build(spec)` 并负责装配。
+QMIX mixer 使用超网络字段与 value_backbone，不提供普通 backbone 字段。
+可以直接运行的历史编码例子及各组件共享关系见[网络教程](networks.md)。
 
 ### 自定义 critic：最短可运行路径
 

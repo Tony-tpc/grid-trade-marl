@@ -50,20 +50,17 @@
 - [IndependentDiscreteConfig](#independentdiscreteconfig)
 - [IndependentDiscreteConfig.build](#independentdiscreteconfig-build)
 - [IndependentDeterministicConfig](#independentdeterministicconfig)
-- [IndependentDeterministicConfig.__post_init__](#independentdeterministicconfig-__post_init__)
 - [IndependentDeterministicConfig.build](#independentdeterministicconfig-build)
 - [IndependentGaussianConfig](#independentgaussianconfig)
-- [IndependentGaussianConfig.__post_init__](#independentgaussianconfig-__post_init__)
 - [IndependentGaussianConfig.build](#independentgaussianconfig-build)
 - [SharedDiscreteQConfig](#shareddiscreteqconfig)
-- [SharedDiscreteQConfig.__post_init__](#shareddiscreteqconfig-__post_init__)
 - [SharedDiscreteQConfig.build](#shareddiscreteqconfig-build)
 
 <a id="policytopology"></a>
 
 ## PolicyTopology
 
-[源码位置](../../marl/modules/policy.py#L31) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L41) · [页内目录](#符号目录)
 
 `class PolicyTopology(Protocol)`
 
@@ -73,7 +70,7 @@
 
 ## PolicyTopology.act
 
-[源码位置](../../marl/modules/policy.py#L34) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L44) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None) -> MARLModelOutput
@@ -85,7 +82,7 @@ def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: T
 
 ## PolicyTopology.parameters
 
-[源码位置](../../marl/modules/policy.py#L42) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L52) · [页内目录](#符号目录)
 
 ```python
 def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
@@ -97,7 +94,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## DiscretePolicy
 
-[源码位置](../../marl/modules/policy.py#L46) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L56) · [页内目录](#符号目录)
 
 `class DiscretePolicy(PolicyTopology, Protocol)`
 
@@ -107,7 +104,7 @@ def parameters(self, recurse: bool=True) -> Iterator[nn.Parameter]
 
 ## DiscretePolicy.act
 
-[源码位置](../../marl/modules/policy.py#L47) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L57) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None, hidden_state: RecurrentState=None) -> MARLModelOutput
@@ -119,7 +116,7 @@ def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: T
 
 ## DiscretePolicy.logits
 
-[源码位置](../../marl/modules/policy.py#L56) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L66) · [页内目录](#符号目录)
 
 ```python
 def logits(self, observations: Tensor, action_mask: Tensor | None=None) -> Tensor
@@ -131,7 +128,7 @@ def logits(self, observations: Tensor, action_mask: Tensor | None=None) -> Tenso
 
 ## DiscretePolicy.evaluate
 
-[源码位置](../../marl/modules/policy.py#L58) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L68) · [页内目录](#符号目录)
 
 ```python
 def evaluate(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None) -> MARLModelOutput
@@ -143,7 +140,7 @@ def evaluate(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor
 
 ## AgentLogitsPolicy
 
-[源码位置](../../marl/modules/policy.py#L69) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L79) · [页内目录](#符号目录)
 
 `class AgentLogitsPolicy(Protocol)`
 
@@ -153,7 +150,7 @@ def evaluate(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor
 
 ## AgentLogitsPolicy.logits_for_agent
 
-[源码位置](../../marl/modules/policy.py#L72) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L82) · [页内目录](#符号目录)
 
 ```python
 def logits_for_agent(self, observations: Tensor, agent_index: int, action_mask: Tensor | None=None) -> Tensor
@@ -165,7 +162,7 @@ def logits_for_agent(self, observations: Tensor, agent_index: int, action_mask: 
 
 ## LocalQPolicy
 
-[源码位置](../../marl/modules/policy.py#L81) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L91) · [页内目录](#符号目录)
 
 `class LocalQPolicy(PolicyTopology, Protocol)`
 
@@ -175,7 +172,7 @@ def logits_for_agent(self, observations: Tensor, agent_index: int, action_mask: 
 
 ## LocalQPolicy.q_values
 
-[源码位置](../../marl/modules/policy.py#L82) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L92) · [页内目录](#符号目录)
 
 ```python
 def q_values(self, observations: Tensor) -> Tensor
@@ -187,7 +184,7 @@ def q_values(self, observations: Tensor) -> Tensor
 
 ## _stack_scalar
 
-[源码位置](../../marl/modules/policy.py#L85) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L95) · [页内目录](#符号目录)
 
 ```python
 def _stack_scalar(values: list[Tensor | None]) -> Tensor
@@ -199,7 +196,7 @@ def _stack_scalar(values: list[Tensor | None]) -> Tensor
 
 ## _stack_parameter
 
-[源码位置](../../marl/modules/policy.py#L92) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L102) · [页内目录](#符号目录)
 
 ```python
 def _stack_parameter(outputs: list[ActionHeadOutput], name: str) -> Tensor
@@ -211,7 +208,7 @@ def _stack_parameter(outputs: list[ActionHeadOutput], name: str) -> Tensor
 
 ## IndependentDiscretePolicy
 
-[源码位置](../../marl/modules/policy.py#L101) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L111) · [页内目录](#符号目录)
 
 `class IndependentDiscretePolicy(nn.Module)`
 
@@ -221,10 +218,10 @@ def _stack_parameter(outputs: list[ActionHeadOutput], name: str) -> Tensor
 
 ## IndependentDiscretePolicy.__init__
 
-[源码位置](../../marl/modules/policy.py#L104) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L114) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, observation_dim: int, action_dim: int, backbone: BackboneConfig | None=None) -> None
+def __init__(self, num_agents: int, observation_dim: int, action_dim: int, backbone: BackboneConfig | None=None, encoder: EncoderConfig=_DEFAULT_ENCODER, history: HistoryLayout | None=None) -> None
 ```
 
 构造 IndependentDiscretePolicy，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -233,7 +230,7 @@ def __init__(self, num_agents: int, observation_dim: int, action_dim: int, backb
 
 ## IndependentDiscretePolicy.initial_state
 
-[源码位置](../../marl/modules/policy.py#L122) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L141) · [页内目录](#符号目录)
 
 ```python
 def initial_state(self, batch_size: int) -> RecurrentState
@@ -245,7 +242,7 @@ def initial_state(self, batch_size: int) -> RecurrentState
 
 ## IndependentDiscretePolicy._agent_state
 
-[源码位置](../../marl/modules/policy.py#L129) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L148) · [页内目录](#符号目录)
 
 ```python
 def _agent_state(self, state: RecurrentState, index: int, batch: int) -> RecurrentState
@@ -257,7 +254,7 @@ def _agent_state(self, state: RecurrentState, index: int, batch: int) -> Recurre
 
 ## IndependentDiscretePolicy._agent_state.select
 
-[源码位置](../../marl/modules/policy.py#L130) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L149) · [页内目录](#符号目录)
 
 ```python
 def select(value: Tensor) -> Tensor
@@ -269,7 +266,7 @@ def select(value: Tensor) -> Tensor
 
 ## IndependentDiscretePolicy._validate
 
-[源码位置](../../marl/modules/policy.py#L137) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L156) · [页内目录](#符号目录)
 
 ```python
 def _validate(self, observations: Tensor, action_mask: Tensor | None) -> None
@@ -281,7 +278,7 @@ def _validate(self, observations: Tensor, action_mask: Tensor | None) -> None
 
 ## IndependentDiscretePolicy._mask_for
 
-[源码位置](../../marl/modules/policy.py#L151) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L170) · [页内目录](#符号目录)
 
 ```python
 def _mask_for(self, action_mask: Tensor | None, index: int) -> Tensor | None
@@ -293,7 +290,7 @@ def _mask_for(self, action_mask: Tensor | None, index: int) -> Tensor | None
 
 ## IndependentDiscretePolicy.logits
 
-[源码位置](../../marl/modules/policy.py#L154) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L173) · [页内目录](#符号目录)
 
 ```python
 def logits(self, observations: Tensor, action_mask: Tensor | None=None) -> Tensor
@@ -305,7 +302,7 @@ def logits(self, observations: Tensor, action_mask: Tensor | None=None) -> Tenso
 
 ## IndependentDiscretePolicy.logits_for_agent
 
-[源码位置](../../marl/modules/policy.py#L169) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L188) · [页内目录](#符号目录)
 
 ```python
 def logits_for_agent(self, observations: Tensor, agent_index: int, action_mask: Tensor | None=None) -> Tensor
@@ -317,7 +314,7 @@ def logits_for_agent(self, observations: Tensor, agent_index: int, action_mask: 
 
 ## IndependentDiscretePolicy.act
 
-[源码位置](../../marl/modules/policy.py#L187) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L206) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None, hidden_state: RecurrentState=None) -> MARLModelOutput
@@ -329,7 +326,7 @@ def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: T
 
 ## IndependentDiscretePolicy.evaluate
 
-[源码位置](../../marl/modules/policy.py#L215) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L234) · [页内目录](#符号目录)
 
 ```python
 def evaluate(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None) -> MARLModelOutput
@@ -341,7 +338,7 @@ def evaluate(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor
 
 ## IndependentDeterministicPolicy
 
-[源码位置](../../marl/modules/policy.py#L248) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L267) · [页内目录](#符号目录)
 
 `class IndependentDeterministicPolicy(nn.Module)`
 
@@ -354,10 +351,10 @@ act 与高斯拓扑的组装步骤相似，但动作分布、默认确定性和�
 
 ## IndependentDeterministicPolicy.__init__
 
-[源码位置](../../marl/modules/policy.py#L255) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L274) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int, layer_norm: bool=False) -> None
+def __init__(self, num_agents: int, observation_dim: int, action_dim: int, backbone: MLPBackboneConfig=_DEFAULT_BACKBONE, encoder: EncoderConfig=_DEFAULT_ENCODER, history: HistoryLayout | None=None) -> None
 ```
 
 构造 IndependentDeterministicPolicy，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -366,7 +363,7 @@ def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidde
 
 ## IndependentDeterministicPolicy.act
 
-[源码位置](../../marl/modules/policy.py#L275) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L297) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Tensor | None=None) -> MARLModelOutput
@@ -378,7 +375,7 @@ def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Te
 
 ## IndependentGaussianPolicy
 
-[源码位置](../../marl/modules/policy.py#L297) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L319) · [页内目录](#符号目录)
 
 `class IndependentGaussianPolicy(nn.Module)`
 
@@ -388,10 +385,10 @@ def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Te
 
 ## IndependentGaussianPolicy.__init__
 
-[源码位置](../../marl/modules/policy.py#L300) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L322) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidden_dim: int, layer_norm: bool=False) -> None
+def __init__(self, num_agents: int, observation_dim: int, action_dim: int, backbone: MLPBackboneConfig=_DEFAULT_BACKBONE, encoder: EncoderConfig=_DEFAULT_ENCODER, history: HistoryLayout | None=None) -> None
 ```
 
 构造 IndependentGaussianPolicy，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -400,7 +397,7 @@ def __init__(self, num_agents: int, observation_dim: int, action_dim: int, hidde
 
 ## IndependentGaussianPolicy.act
 
-[源码位置](../../marl/modules/policy.py#L320) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L345) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None) -> MARLModelOutput
@@ -412,7 +409,7 @@ def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: T
 
 ## SharedDiscreteQPolicy
 
-[源码位置](../../marl/modules/policy.py#L342) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L367) · [页内目录](#符号目录)
 
 `class SharedDiscreteQPolicy(nn.Module)`
 
@@ -422,10 +419,10 @@ def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: T
 
 ## SharedDiscreteQPolicy.__init__
 
-[源码位置](../../marl/modules/policy.py#L345) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L370) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, observation_dim: int, action_dim: int, hidden_dim: int) -> None
+def __init__(self, observation_dim: int, action_dim: int, backbone: MLPBackboneConfig=_DEFAULT_BACKBONE, encoder: EncoderConfig=_DEFAULT_ENCODER, history: HistoryLayout | None=None) -> None
 ```
 
 构造 SharedDiscreteQPolicy，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -434,7 +431,7 @@ def __init__(self, observation_dim: int, action_dim: int, hidden_dim: int) -> No
 
 ## SharedDiscreteQPolicy.q_values
 
-[源码位置](../../marl/modules/policy.py#L352) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L387) · [页内目录](#符号目录)
 
 ```python
 def q_values(self, observations: Tensor) -> Tensor
@@ -446,7 +443,7 @@ def q_values(self, observations: Tensor) -> Tensor
 
 ## SharedDiscreteQPolicy.act
 
-[源码位置](../../marl/modules/policy.py#L358) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L393) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Tensor | None=None) -> MARLModelOutput
@@ -458,7 +455,7 @@ def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Te
 
 ## IndependentDiscreteConfig
 
-[源码位置](../../marl/modules/policy.py#L375) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L410) · [页内目录](#符号目录)
 
 `class IndependentDiscreteConfig()`
 
@@ -469,13 +466,14 @@ def act(self, observations: Tensor, *, deterministic: bool=True, action_mask: Te
 ```python
 kind: Literal['independent_discrete'] = 'independent_discrete'
 backbone: BackboneConfig = MLPBackboneConfig()
+encoder: EncoderConfig = IdentityEncoderConfig()
 ```
 
 <a id="independentdiscreteconfig-build"></a>
 
 ## IndependentDiscreteConfig.build
 
-[源码位置](../../marl/modules/policy.py#L379) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L415) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy
@@ -487,7 +485,7 @@ def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy
 
 ## IndependentDeterministicConfig
 
-[源码位置](../../marl/modules/policy.py#L389) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L427) · [页内目录](#符号目录)
 
 `class IndependentDeterministicConfig()`
 
@@ -497,27 +495,15 @@ def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy
 
 ```python
 kind: Literal['independent_deterministic'] = 'independent_deterministic'
-hidden_dim: int = 128
-layer_norm: bool = False
+backbone: MLPBackboneConfig = MLPBackboneConfig()
+encoder: EncoderConfig = IdentityEncoderConfig()
 ```
-
-<a id="independentdeterministicconfig-__post_init__"></a>
-
-## IndependentDeterministicConfig.__post_init__
-
-[源码位置](../../marl/modules/policy.py#L394) · [页内目录](#符号目录)
-
-```python
-def __post_init__(self) -> None
-```
-
-在 IndependentDeterministicConfig 数据类构造后校验字段范围/一致性；返回 None，非法配置立即报错。
 
 <a id="independentdeterministicconfig-build"></a>
 
 ## IndependentDeterministicConfig.build
 
-[源码位置](../../marl/modules/policy.py#L398) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L432) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy
@@ -529,7 +515,7 @@ def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy
 
 ## IndependentGaussianConfig
 
-[源码位置](../../marl/modules/policy.py#L409) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L444) · [页内目录](#符号目录)
 
 `class IndependentGaussianConfig()`
 
@@ -539,27 +525,15 @@ def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy
 
 ```python
 kind: Literal['independent_gaussian'] = 'independent_gaussian'
-hidden_dim: int = 128
-layer_norm: bool = False
+backbone: MLPBackboneConfig = MLPBackboneConfig()
+encoder: EncoderConfig = IdentityEncoderConfig()
 ```
-
-<a id="independentgaussianconfig-__post_init__"></a>
-
-## IndependentGaussianConfig.__post_init__
-
-[源码位置](../../marl/modules/policy.py#L414) · [页内目录](#符号目录)
-
-```python
-def __post_init__(self) -> None
-```
-
-在 IndependentGaussianConfig 数据类构造后校验字段范围/一致性；返回 None，非法配置立即报错。
 
 <a id="independentgaussianconfig-build"></a>
 
 ## IndependentGaussianConfig.build
 
-[源码位置](../../marl/modules/policy.py#L418) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L449) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy
@@ -571,7 +545,7 @@ def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy
 
 ## SharedDiscreteQConfig
 
-[源码位置](../../marl/modules/policy.py#L429) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L461) · [页内目录](#符号目录)
 
 `class SharedDiscreteQConfig()`
 
@@ -581,26 +555,15 @@ def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy
 
 ```python
 kind: Literal['shared_discrete_q'] = 'shared_discrete_q'
-hidden_dim: int = 128
+backbone: MLPBackboneConfig = MLPBackboneConfig()
+encoder: EncoderConfig = IdentityEncoderConfig()
 ```
-
-<a id="shareddiscreteqconfig-__post_init__"></a>
-
-## SharedDiscreteQConfig.__post_init__
-
-[源码位置](../../marl/modules/policy.py#L433) · [页内目录](#符号目录)
-
-```python
-def __post_init__(self) -> None
-```
-
-在 SharedDiscreteQConfig 数据类构造后校验字段范围/一致性；返回 None，非法配置立即报错。
 
 <a id="shareddiscreteqconfig-build"></a>
 
 ## SharedDiscreteQConfig.build
 
-[源码位置](../../marl/modules/policy.py#L437) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/policy.py#L466) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> SharedDiscreteQPolicy

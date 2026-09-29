@@ -7,6 +7,7 @@ from marl.algorithms import MAAC, MAACConfig
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
 from marl.experiment import build_experiment
+from marl.models import MLPBackboneConfig
 from marl.modules import AttentionCritic
 from marl.modules.policy import AgentLogitsPolicy
 from marl.objectives import CounterfactualPolicyObjective
@@ -37,7 +38,12 @@ def _batch() -> MARLBatch:
 
 
 def test_attention_critic_has_agent_specific_encoders_and_q_heads() -> None:
-    critic = AttentionCritic(2, 3, 4, hidden_dim=8, attention_heads=2)
+    critic = AttentionCritic(
+        _spec(),
+        embedding=MLPBackboneConfig(hidden_dims=(), output_dim=8),
+        backbone=MLPBackboneConfig(hidden_dims=(), output_dim=8),
+        attention_heads=2,
+    )
 
     assert critic.own_encoders[0] is not critic.own_encoders[1]
     assert critic.state_action_encoders[0] is not critic.state_action_encoders[1]
@@ -102,7 +108,12 @@ def test_counterfactual_baseline_matches_manual_small_tensor() -> None:
 
 
 def test_attention_critic_validates_joint_shapes_early() -> None:
-    critic = AttentionCritic(2, 3, 4, hidden_dim=8, attention_heads=2)
+    critic = AttentionCritic(
+        _spec(),
+        embedding=MLPBackboneConfig(hidden_dims=(), output_dim=8),
+        backbone=MLPBackboneConfig(hidden_dims=(), output_dim=8),
+        attention_heads=2,
+    )
 
     try:
         critic(torch.zeros(2, 3, 3), torch.zeros(2, 3, dtype=torch.long))
@@ -120,10 +131,7 @@ def test_single_agent_logits_fast_path_matches_full_policy_logits() -> None:
     full = algorithm.policy.logits(observations, action_mask)
     assert isinstance(algorithm.policy, AgentLogitsPolicy)
     selected = torch.stack(
-        [
-            algorithm.policy.logits_for_agent(observations, index, action_mask)
-            for index in range(2)
-        ],
+        [algorithm.policy.logits_for_agent(observations, index, action_mask) for index in range(2)],
         dim=-2,
     )
 

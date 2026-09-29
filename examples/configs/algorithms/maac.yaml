@@ -5,6 +5,7 @@ algorithm: maac  # 必填；选择对应配置类型，切换算法应换整份 
 
 policy:
   kind: independent_discrete
+  encoder: {kind: identity}  # history 可选 GRU/LSTM/Transformer；不携带跨 transition 状态。
   backbone:
     kind: mlp  # MAPPO 可选 mlp/gru/lstm；MAAC 仅 mlp。
     hidden_dims: [128, 128]  # MLP 中间层正整数列表。
@@ -12,10 +13,20 @@ policy:
     layer_norm: false  # MLP 各层归一化，默认关闭。
 
 critic:
-  layer_norm: false  # 可选；critic 隐藏层 LayerNorm，默认关闭。
   kind: attention_q  # 可选；组件实现名称，默认值如本行。
-  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
-  attention_heads: 4  # 可选；注意力头数，必须 > 0 且整除 hidden_dim。
+  encoder: {kind: identity}
+  graph: null  # 可选 GNN；论文历史编码示例不启用。
+  embedding:
+    kind: mlp
+    hidden_dims: []  # 空列表表示只有 output_dim 特征层；默认保留原来的单层嵌入。
+    output_dim: 128  # 注意力宽度由此推导；必须被 attention_heads 整除。
+    layer_norm: false
+  backbone:  # Q head 前的特征层；最后动作数量来自 EnvironmentSpec。
+    kind: mlp
+    hidden_dims: []
+    output_dim: 128
+    layer_norm: false
+  attention_heads: 4
 
 loss:
   normalize_targets: false  # 可选；逐智能体 target 运行尺度，保留原始 V/Q 单位。

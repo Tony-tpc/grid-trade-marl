@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -204,9 +204,7 @@ class ActorCriticUpdateConfig(OffPolicyUpdateConfig):
             有效裁剪上限 float 或 None；不会修改冻结配置。
         """
         return (
-            self.actor_max_grad_norm
-            if self.actor_max_grad_norm is not None
-            else self.max_grad_norm
+            self.actor_max_grad_norm if self.actor_max_grad_norm is not None else self.max_grad_norm
         )
 
     @property
@@ -329,19 +327,21 @@ class OffPolicyCollector:
                 device=self.device,
             )
             with torch.inference_mode():
-                actions = self.algorithm.act(
-                    observations,
-                    deterministic=deterministic,
-                    action_mask=action_masks,
-                ).cpu().numpy()
+                actions = (
+                    self.algorithm.act(
+                        observations,
+                        deterministic=deterministic,
+                        action_mask=action_masks,
+                    )
+                    .cpu()
+                    .numpy()
+                )
             if action_transform is not None:
                 actions = action_transform(actions)
             following = self.environment.step(actions)
             yield tuple(
                 Transition(current, action, next_step)
-                for current, action, next_step in zip(
-                    steps, actions, following, strict=True
-                )
+                for current, action, next_step in zip(steps, actions, following, strict=True)
             )
             steps = following
 
@@ -435,9 +435,7 @@ class OffPolicyTrainer:
             raise RuntimeError(
                 f"replay 样本不足：{len(self.replay)}/{self.replay_config.batch_size}"
             )
-        batch = self.replay.sample(
-            self.replay_config.batch_size, self.rng, device=self.device
-        )
+        batch = self.replay.sample(self.replay_config.batch_size, self.rng, device=self.device)
         return self.algorithm.update(batch, self.optimization)
 
     def update_batch(self, batch: MARLBatch) -> dict[str, float]:
@@ -461,12 +459,13 @@ class OffPolicyTrainer:
             无显式参数；读取当前实例字段。
 
         Returns:
-            schema 4 状态字典；不包含外部采样器和环境当前位置。
+            schema 5 状态字典；保存网络/输入布局，不包含外部采样器和环境当前位置。
         """
         state = build_trainer_checkpoint_state(
             self.algorithm.state_dict(),
             self.config_data,
             self.optimization.state_dict(),
+            input_spec=asdict(self.spec),
         )
         state["replay"] = self.replay.state_dict()
         state["rng"] = deepcopy(self.rng.bit_generator.state)
@@ -481,7 +480,12 @@ class OffPolicyTrainer:
         Returns:
             None；直接修改训练状态，不承诺损坏载荷的完整事务回滚。
         """
-        validate_trainer_checkpoint_state(state, self.config_data)
+        validate_trainer_checkpoint_state(
+            state,
+            self.config_data,
+            algorithm_state=self.algorithm.state_dict(),
+            input_spec=asdict(self.spec),
+        )
         restore_torch_rng_state(state)
         self.algorithm.load_state_dict(cast(Mapping[str, Any], state["algorithm"]))
         self.optimization.load_state_dict(cast(Mapping[str, Any], state["optimization"]))

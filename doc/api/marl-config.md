@@ -14,6 +14,7 @@
 - [_flat](#_flat)
 - [_backbone](#_backbone)
 - [_component](#_component)
+- [_encoder](#_encoder)
 - [algorithm_config_from_dict](#algorithm_config_from_dict)
 - [load_algorithm_config](#load_algorithm_config)
 - [config_to_dict](#config_to_dict)
@@ -24,7 +25,7 @@
 
 ## _mapping
 
-[源码位置](../../marl/config.py#L56) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L66) · [页内目录](#符号目录)
 
 ```python
 def _mapping(data: object, location: str) -> Mapping[str, Any]
@@ -36,7 +37,7 @@ def _mapping(data: object, location: str) -> Mapping[str, Any]
 
 ## _flat
 
-[源码位置](../../marl/config.py#L62) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L72) · [页内目录](#符号目录)
 
 ```python
 def _flat(cls: type[T], data: object, location: str) -> T
@@ -48,7 +49,7 @@ def _flat(cls: type[T], data: object, location: str) -> T
 
 ## _backbone
 
-[源码位置](../../marl/config.py#L104) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L116) · [页内目录](#符号目录)
 
 ```python
 def _backbone(data: object, location: str) -> BackboneConfig
@@ -60,7 +61,7 @@ def _backbone(data: object, location: str) -> BackboneConfig
 
 ## _component
 
-[源码位置](../../marl/config.py#L116) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L128) · [页内目录](#符号目录)
 
 ```python
 def _component(data: object, builtin: type[Buildable[T]], capability: type, category: Category, catalog: ExtensionCatalog | None) -> Buildable[T]
@@ -68,11 +69,23 @@ def _component(data: object, builtin: type[Buildable[T]], capability: type, cate
 
 选择内置组件配置或显式 catalog 的外部组件；返回 Buildable，尚不实例化网络。
 
+<a id="_encoder"></a>
+
+## _encoder
+
+[源码位置](../../marl/config.py#L164) · [页内目录](#符号目录)
+
+```python
+def _encoder(data: object, location: str) -> EncoderConfig
+```
+
+历史窗口尺寸只能来自 EnvironmentSpec；YAML 只声明网络超参数。
+
 <a id="algorithm_config_from_dict"></a>
 
 ## algorithm_config_from_dict
 
-[源码位置](../../marl/config.py#L145) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L183) · [页内目录](#符号目录)
 
 ```python
 def algorithm_config_from_dict(data: Mapping[str, object], *, catalog: ExtensionCatalog | None=None) -> AlgorithmConfig
@@ -84,7 +97,7 @@ def algorithm_config_from_dict(data: Mapping[str, object], *, catalog: Extension
 
 ## load_algorithm_config
 
-[源码位置](../../marl/config.py#L231) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L269) · [页内目录](#符号目录)
 
 ```python
 def load_algorithm_config(path: str | Path, *, catalog: ExtensionCatalog | None=None) -> AlgorithmConfig
@@ -96,7 +109,7 @@ def load_algorithm_config(path: str | Path, *, catalog: ExtensionCatalog | None=
 
 ## config_to_dict
 
-[源码位置](../../marl/config.py#L241) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L279) · [页内目录](#符号目录)
 
 ```python
 def config_to_dict(config: AlgorithmConfig) -> dict[str, Any]
@@ -108,7 +121,7 @@ Checkpoint/YAML 数据快照；外部组件只保存名称和配置，不序列�
 
 ## config_to_dict.encode
 
-[源码位置](../../marl/config.py#L244) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L282) · [页内目录](#符号目录)
 
 ```python
 def encode(value: Any) -> Any
@@ -120,7 +133,7 @@ def encode(value: Any) -> Any
 
 ## config_to_dict.deep_settings
 
-[源码位置](../../marl/config.py#L266) · [页内目录](#符号目录)
+[源码位置](../../marl/config.py#L304) · [页内目录](#符号目录)
 
 ```python
 def deep_settings(settings: Mapping[str, object]) -> dict[str, Any]

@@ -1,9 +1,9 @@
 """一般和博弈版 MADDPG：每个智能体优化自己的累计奖励。
-    replay 保存观测、联合动作、逐体奖励、下一观测及独立的终止/截断标记。
-    下一动作由 target actor 生成；只有真正终止阻止 TD bootstrap。
-    一个 Agent 对应一个 Actor 、一个 Critic 
-    Critic 是集中式的，读取所有智能体的观测和动作。
-    Actor 是独立的，只读取各自智能体的观测。
+replay 保存观测、联合动作、逐体奖励、下一观测及独立的终止/截断标记。
+下一动作由 target actor 生成；只有真正终止阻止 TD bootstrap。
+一个 Agent 对应一个 Actor 、一个 Critic
+Critic 是集中式的，读取所有智能体的观测和动作。
+Actor 是独立的，只读取各自智能体的观测。
 """
 
 from __future__ import annotations
@@ -70,7 +70,6 @@ class MADDPGConfig:
     update: ActorCriticUpdateConfig = ActorCriticUpdateConfig()
     target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
-
     def validate(self, spec: EnvironmentSpec) -> None:
         """验证配置版本和算法标识，并要求环境使用连续动作。
 
@@ -105,6 +104,7 @@ class MADDPG(BaseMARLAlgorithm):
     不能把不同家庭/玩家的奖励平均。所有 Actor 的输入输出维度目前要求相同，
     但网络参数独立，可学习不同的博弈策略。
     """
+
     def __init__(self, spec: EnvironmentSpec, config: MADDPGConfig) -> None:
         """校验配置并装配 MADDPG 的在线网络、数学目标及所需 target/统计模块。
 
@@ -148,7 +148,9 @@ class MADDPG(BaseMARLAlgorithm):
         Returns:
             动作 Tensor：离散 [...,N]，连续 [...,N,A]；此接口不返回 log-prob/value。
         """
-        return self.policy.act(observations, deterministic=True, action_mask=action_mask).actions
+        return self.policy.act(
+            observations, deterministic=True, action_mask=action_mask
+        ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """汇总各子目标用于数学诊断；只构图，不执行 backward、step 或 target 统计更新。
@@ -175,7 +177,11 @@ class MADDPG(BaseMARLAlgorithm):
             None；字段缺失或形状不符抛 ValueError。
         """
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
-        if batch.actions is None or batch.rewards is None or batch.next_observations is None:
+        if (
+            batch.actions is None
+            or batch.rewards is None
+            or batch.next_observations is None
+        ):
             raise ValueError("MADDPG 训练需要 actions/rewards/next_observations")
 
     def compute_critic_loss_bundle(
@@ -206,16 +212,24 @@ class MADDPG(BaseMARLAlgorithm):
             next_q = self.target_critics(
                 centralized_critic_input(batch.next_observations, next_actions)
             )
-            target_q = self.return_estimator.estimate(
-                batch.rewards, next_q, terminated
-            )
+            # R_i + gamma Q_i'，只有 terminated 才阻止 bootstrap
+            target_q = self.return_estimator.estimate(batch.rewards, next_q, terminated)
+        # 更新 target scale 统计信息，用于 normalize_targets；诊断调用时不更新
         if update_statistics:
             self.target_scale.update(target_q)
-        critic_result = self.td_loss(self.target_scale(current_q), self.target_scale(target_q))
+        critic_result = self.td_loss(
+            self.target_scale(current_q), self.target_scale(target_q)
+        )
         bundle = LossBundle.combine((critic_result,))
-        return LossBundle(bundle.total, {**bundle.terms,
-            **value_diagnostics(current_q, target_q),
-            **agent_statistics("reward", batch.rewards)})
+        return LossBundle(
+            bundle.total,
+            # 日志文件中记录 critic_loss、target_q_mean、target_q_std、reward_mean、reward_std
+            {
+                **bundle.terms,
+                **value_diagnostics(current_q, target_q),
+                **agent_statistics("reward", batch.rewards),
+            },
+        )
 
     def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
         """冻结 critic 参数并隔离其他 actor 动作，构建每个智能体自己的策略目标。
@@ -249,9 +263,7 @@ class MADDPG(BaseMARLAlgorithm):
         actor_result = self.policy_objective(torch.stack(q_terms, dim=-1))
         return LossBundle.combine((actor_result,))
 
-    def update(
-        self, batch: MARLBatch, runtime: OptimizerRuntime
-    ) -> dict[str, float]:
+    def update(self, batch: MARLBatch, runtime: OptimizerRuntime) -> dict[str, float]:
         """对一批 replay 经验按 critic → actor → target 顺序更新参数；复用基类 optimize。
 
         按 critic → actor → target 的 MADDPG 顺序更新。

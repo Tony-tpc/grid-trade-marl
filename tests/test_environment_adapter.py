@@ -63,7 +63,11 @@ def test_energy_adapter_builds_config_algorithm_and_trainable_batch() -> None:
     algorithm_config = replace(
         MAACConfig(),
         policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=16)),
-        critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
+        critic=AttentionQConfig(
+            embedding=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+            backbone=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+            attention_heads=4,
+        ),
         replay=ReplayConfig(capacity=8, batch_size=3),
     )
     trainer = build_experiment(spec, algorithm_config, seed=8).trainer

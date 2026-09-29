@@ -91,7 +91,11 @@ def main() -> None:
             policy=IndependentDiscreteConfig(
                 backbone=MLPBackboneConfig(hidden_dims=(16,), output_dim=16)
             ),
-            critic=AttentionQConfig(hidden_dim=16, attention_heads=4),
+            critic=AttentionQConfig(
+                embedding=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+                backbone=MLPBackboneConfig(hidden_dims=(), output_dim=16),
+                attention_heads=4,
+            ),
             replay=ReplayConfig(capacity=128, batch_size=8),
         )
     experiment = build_experiment(vector, config, device="cpu", seed=args.seed)

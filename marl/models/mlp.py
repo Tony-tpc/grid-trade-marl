@@ -25,7 +25,7 @@ class MLPBackbone(BaseBackbone):
         layer_norm: bool = False,
     ) -> None:
         super().__init__(input_dim, output_dim)
-        if not hidden_dims or any(dim <= 0 for dim in hidden_dims):
+        if any(dim <= 0 for dim in hidden_dims):
             raise ValueError("hidden_dims 必须包含正整数")
         layers: list[nn.Module] = []
         previous = input_dim
@@ -54,10 +54,10 @@ class MLPBackboneConfig:
     layer_norm: bool = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.hidden_dims, tuple) or not self.hidden_dims or any(
+        if not isinstance(self.hidden_dims, tuple) or any(
             type(dim) is not int or dim < 1 for dim in self.hidden_dims
         ):
-            raise ValueError("hidden_dims 必须是非空的正整数 tuple")
+            raise ValueError("hidden_dims 必须是正整数 tuple；允许空 tuple")
         if type(self.output_dim) is not int or self.output_dim < 1:
             raise ValueError("output_dim 必须是正整数")
 

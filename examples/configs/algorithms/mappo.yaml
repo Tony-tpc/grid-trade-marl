@@ -7,6 +7,7 @@ algorithm: mappo  # 必填；选择对应配置类型，切换算法应换整份
 
 policy:
   kind: independent_discrete
+  encoder: {kind: identity}  # history 编码选择与尺寸声明见 docs/network_configuration.md。
   backbone:
     kind: mlp  # MAPPO 可选 mlp/gru/lstm；MAAC 仅 mlp。
     hidden_dims: [128, 128]  # MLP 中间层正整数列表。
@@ -15,6 +16,8 @@ policy:
 
 critic:
   kind: centralized_value
+  encoder: {kind: identity}
+  graph: null  # 可选 {kind: gnn, hidden_dim: 128, num_layers: 2}，需要 state_layout。
   backbone:
     kind: mlp
     hidden_dims: [128, 128]

@@ -5,11 +5,24 @@ algorithm: qmix  # 必填；选择对应配置类型，切换算法应换整份 
 
 policy:
   kind: shared_discrete_q  # 可选；组件实现名称，默认值如本行。
-  hidden_dim: 128  # 可选；隐藏层宽度，必须 > 0。
+  encoder: {kind: identity}
+  backbone:
+    kind: mlp
+    hidden_dims: [128, 128]  # 每项为正整数；允许 []。
+    output_dim: 128
+    layer_norm: false
 
 mixer:
   kind: qmix_mixer  # 可选；组件实现名称，默认值如本行。
   mixing_dim: 32  # 可选；QMIX 混合网络宽度，必须 > 0。
+  encoder: {kind: identity}
+  graph: null  # 可选 GNN；节点布局由 adapter 声明。
+  hyper_hidden_dims: []  # 正整数列表；默认超网络直接输出线性权重，再取绝对值。
+  value_backbone:
+    kind: mlp
+    hidden_dims: []
+    output_dim: 32
+    layer_norm: false
 
 loss:
   td_coefficient: 1  # 可选；TD MSE 权重，必须 >= 0。

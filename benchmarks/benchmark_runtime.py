@@ -75,7 +75,10 @@ def _off_policy_benchmark(
     config = replace(
         MAACConfig(),
         policy=IndependentDiscreteConfig(backbone=MLPBackboneConfig(output_dim=32)),
-        critic=AttentionQConfig(hidden_dim=32, attention_heads=4),
+        critic=AttentionQConfig(
+            embedding=MLPBackboneConfig(hidden_dims=(), output_dim=32),
+            backbone=MLPBackboneConfig(hidden_dims=(), output_dim=32), attention_heads=4,
+        ),
     )
     probe = build_mpe2_simple_adversary(
         MPE2SimpleAdversaryConfig(horizon=horizon), action_kind=ActionKind.DISCRETE

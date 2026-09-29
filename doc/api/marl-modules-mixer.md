@@ -10,6 +10,7 @@
 
 ## 符号目录
 
+- [_hypernetwork](#_hypernetwork)
 - [MixingNetwork](#mixingnetwork)
 - [MixingNetwork.__call__](#mixingnetwork-__call__)
 - [VDNMixer](#vdnmixer)
@@ -21,11 +22,23 @@
 - [QMixerConfig.__post_init__](#qmixerconfig-__post_init__)
 - [QMixerConfig.build](#qmixerconfig-build)
 
+<a id="_hypernetwork"></a>
+
+## _hypernetwork
+
+[源码位置](../../marl/modules/mixer.py#L17) · [页内目录](#符号目录)
+
+```python
+def _hypernetwork(input_dim: int, output_dim: int, hidden_dims: tuple[int, ...]) -> nn.Module
+```
+
+线性输出头；空隐藏层保持原始 Linear 参数与初始化顺序。
+
 <a id="mixingnetwork"></a>
 
 ## MixingNetwork
 
-[源码位置](../../marl/modules/mixer.py#L13) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L29) · [页内目录](#符号目录)
 
 `class MixingNetwork(Protocol)`
 
@@ -35,7 +48,7 @@
 
 ## MixingNetwork.__call__
 
-[源码位置](../../marl/modules/mixer.py#L14) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L30) · [页内目录](#符号目录)
 
 ```python
 def __call__(self, agent_q_values: Tensor, state: Tensor) -> Tensor
@@ -47,7 +60,7 @@ def __call__(self, agent_q_values: Tensor, state: Tensor) -> Tensor
 
 ## VDNMixer
 
-[源码位置](../../marl/modules/mixer.py#L17) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L33) · [页内目录](#符号目录)
 
 `class VDNMixer(nn.Module)`
 
@@ -57,7 +70,7 @@ Value Decomposition Network：直接求和个体 Q 值。
 
 ## VDNMixer.forward
 
-[源码位置](../../marl/modules/mixer.py#L20) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L36) · [页内目录](#符号目录)
 
 ```python
 def forward(self, agent_q_values: Tensor, state: Tensor | None=None) -> Tensor
@@ -69,7 +82,7 @@ def forward(self, agent_q_values: Tensor, state: Tensor | None=None) -> Tensor
 
 ## QMixer
 
-[源码位置](../../marl/modules/mixer.py#L24) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L40) · [页内目录](#符号目录)
 
 `class QMixer(nn.Module)`
 
@@ -82,10 +95,10 @@ Hypernetwork 由全局 state 生成非负权重，从结构上保证
 
 ## QMixer.__init__
 
-[源码位置](../../marl/modules/mixer.py#L31) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L47) · [页内目录](#符号目录)
 
 ```python
-def __init__(self, num_agents: int, state_dim: int, mixing_dim: int=32) -> None
+def __init__(self, num_agents: int, state_dim: int, mixing_dim: int=32, encoder: InputEncoder | None=None, hyper_hidden_dims: tuple[int, ...]=(), value_backbone: MLPBackboneConfig=_DEFAULT_VALUE) -> None
 ```
 
 构造 QMixer，按下方参数初始化网络子模块或运行状态；返回 None。
@@ -94,19 +107,19 @@ def __init__(self, num_agents: int, state_dim: int, mixing_dim: int=32) -> None
 
 ## QMixer.forward
 
-[源码位置](../../marl/modules/mixer.py#L41) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L67) · [页内目录](#符号目录)
 
 ```python
 def forward(self, agent_q_values: Tensor, state: Tensor) -> Tensor
 ```
 
-输入 [...,N] Q 与 [...,S] state，使用非负超网络权重混合，返回 [...,1] 团队 Q。
+输入 agent_q_values [...,N] 和同批维 state [...,S]，编码 state 后生成非负混合权重，返回团队 Q [...,1]；校验批维和末维，保留计算图但不更新参数。
 
 <a id="qmixerconfig"></a>
 
 ## QMixerConfig
 
-[源码位置](../../marl/modules/mixer.py#L59) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L86) · [页内目录](#符号目录)
 
 `class QMixerConfig()`
 
@@ -117,13 +130,17 @@ def forward(self, agent_q_values: Tensor, state: Tensor) -> Tensor
 ```python
 kind: Literal['qmix_mixer'] = 'qmix_mixer'
 mixing_dim: int = 32
+encoder: EncoderConfig = IdentityEncoderConfig()
+graph: GNNBackboneConfig | None = None
+hyper_hidden_dims: tuple[int, ...] = ()
+value_backbone: MLPBackboneConfig = MLPBackboneConfig(hidden_dims=(), output_dim=32)
 ```
 
 <a id="qmixerconfig-__post_init__"></a>
 
 ## QMixerConfig.__post_init__
 
-[源码位置](../../marl/modules/mixer.py#L63) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L94) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -135,10 +152,10 @@ def __post_init__(self) -> None
 
 ## QMixerConfig.build
 
-[源码位置](../../marl/modules/mixer.py#L67) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/mixer.py#L104) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> QMixer
 ```
 
-从 QMixerConfig 的静态参数构造目标对象；输入与具体返回类型见签名，不执行训练。
+输入 EnvironmentSpec，创建 state 编码、权重超网络及 value 分支并返回 QMixer；局部 Q 数量来自 N，状态维度来自 S，不增加共享的全局注册状态。

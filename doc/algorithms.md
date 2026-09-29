@@ -6,19 +6,25 @@
 
 | 算法 | 当前动作 | 奖励 | 经验及更新順序 | 全部函数 |
 |---|---|---|---|---|
-| MAPPO | 离散；MLP/GRU/LSTM | 个体或共享 | fresh rollout；actor → critic，多 epoch | [MAPPO](api/marl-algorithms-mappo.md) |
-| MAAC | 离散；拒绝循环 policy | 个体或共享 | replay；critic → 各 agent actor → target | [MAAC](api/marl-algorithms-maac.md) |
+| MAPPO | 离散 | 个体或共享 | fresh rollout；actor → critic，多 epoch | [MAPPO](api/marl-algorithms-mappo.md) |
+| MAAC | 离散 | 个体或共享 | replay；critic → 各 agent actor → target | [MAAC](api/marl-algorithms-maac.md) |
 | MADDPG | 连续 | 个体或共享 | replay；critic → actor → target | [MADDPG](api/marl-algorithms-maddpg.md) |
 | MASAC | 连续 | 个体或共享 | replay；twin critic → actor → temperature → target | [MASAC](api/marl-algorithms-masac.md) |
 | QMIX | 离散 | 仅共享团队奖励 | replay；value → target | [QMIX](api/marl-algorithms-qmix.md) |
 
-当前没有混合动作、离策略循环 replay、变长存活智能体支持；不以算法名称推断论文变体。
+五算法均支持历史 GRU/LSTM/Transformer encoder，集中式 critic/mixer 可选静态 GNN。
+只有 MAPPO 支持跨环境步循环 backbone。当前没有混合动作、离策略跨步循环 replay、
+变长存活智能体支持；不以算法名称推断论文变体。
 各文件包含 LossConfig、Config 和具体类。`__post_init__` 检查范围，`validate(spec)`
 检查兼容性，`build(spec)` 直接返回实例，`__init__` 注册网络/目标/target/统计模块。
 
 `act` 返回动作；`compute_*_loss_bundle` 构图；`update` 执行优化顺序。总 loss 是诊断入口，
 不要用一个含所有参数的 optimizer 同时训练 actor/critic/temperature。
 [optimize](api/marl-algorithms-base.md#basemarlalgorithm-optimize) 统一清梯度、反传、裁剪和 step。
+
+网络参数位置与共享关系见[网络教程](networks.md)：MAAC 使用独立局部编码与共享
+attention；MADDPG/MASAC 的各 critic/twin 分支保持独立；QMIX 局部 Q 共享参数。
+编码方式变化不改变本页的逐体奖励、TD target 或更新顺序。
 
 ## MAPPO：一次数据，多轮有限更新
 

@@ -7,6 +7,7 @@ from itertools import product
 import numpy as np
 from numpy.typing import NDArray
 
+from marl.core.layout import HistoryLayout, StateLayout
 from marl.envs.base import (
     ActionKind,
     EnvironmentAdapter,
@@ -42,6 +43,13 @@ class EnergyTradingAdapter(EnvironmentAdapter):
         )
         initial_observation = environment.observe()
         n, observation_dim = initial_observation.shape
+        window = environment.config.history_steps
+        history = HistoryLayout(
+            tuple(
+                tuple(1 + channel * window + time for channel in range(4)) for time in range(window)
+            ),
+            (0, *range(1 + 4 * window, observation_dim)),
+        )
         self._spec = EnvironmentSpec(
             num_agents=n,
             observation_dim=observation_dim,
@@ -52,6 +60,13 @@ class EnergyTradingAdapter(EnvironmentAdapter):
             action_kind=self.action_kind,
             horizon=environment.config.horizon,
             reward_structure=RewardStructure.INDIVIDUAL,
+            observation_history=history,
+            state_layout=StateLayout(
+                tuple(
+                    tuple(range(i * observation_dim, (i + 1) * observation_dim)) for i in range(n)
+                ),
+                history=history,
+            ),
         )
 
     @property

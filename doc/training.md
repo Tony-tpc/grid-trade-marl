@@ -22,6 +22,10 @@ python -m venv .venv
 同一进程逐个 step，并非自动开同等数量 CPU 进程。`device=auto` 只按 CUDA 可用性选择，
 不保证 GPU 更快；先 CPU 小规模跑通，再用相同真实环境步数比较端到端吞吐。
 
+上述能源命令使用默认 MLP。需要验收 48 步历史 LSTM 时，使用独立的
+[maac_energy_history.yaml](../examples/configs/algorithms/maac_energy_history.yaml)，
+完整命令、预期 update 数量和 Python 单次更新示例见[网络教程](networks.md)。
+
 不依赖能源任务的完整教学脚本：
 
 ```powershell
@@ -95,7 +99,9 @@ trial = replace(base, update=replace(base.update, actor_learning_rate=1e-4, epoc
 | value_target.gamma | TD bootstrap 折扣 | 真实终止屏蔽、截断保留 |
 | target_update.tau 或 interval | 目标跟随速度 | 参数过快/过慢变化与 critic 漂移 |
 | MASAC initial_alpha / target_entropy / temperature_learning_rate | 连续探索和温度自适应 | alpha、熵、动作饱和比例 |
-| backbone 宽度、层数、sequence_length | 表示容量与反传记忆长度 | 过拟合、耗时、记忆任务、padding 比例 |
+| policy/critic.backbone | 编码后的表示容量；MAPPO 可使用跨步 GRU/LSTM | 层宽、耗时、梯度与记忆任务 |
+| encoder.temporal / 环境 history_steps | 窗口时序网络 / 原始窗口长度 W | 历史排列、填充值、局部编码梯度 |
+| update.sequence_length（仅 MAPPO） | 跨步循环 backbone 的连续反传片段长度 | padding 比例；仅有历史 encoder 时必须为 null |
 
 专用 max_grad_norm=None 表示回退公共值，不是单独关闭该角色裁剪；公共也为 None 时才
 关闭。soft tau 越小 target 越慢，hard interval 以算法 update_count 而非环境步计数。
@@ -107,7 +113,8 @@ MAPPO 当前 update 配置没有 AMP 开关；离策略 amp_dtype=bf16 要求支
 2. 记录原始基线配置、依赖版本、Git 版本、真实环境步和 optimizer-step 数。
 3. 先检查观测/奖励尺度、mask 和终止，再调整学习率、梯度上限、目标尺度。
 4. 其次调整 PPO epoch/clip/entropy，或 replay 调度/target 更新，避免同时改所有项。
-5. 需要历史记忆才启用 GRU/LSTM，用专门任务验证记忆链；调 sequence_length 时检查 padding。
+5. 输入已含历史窗口时配置 `encoder`；需要跨环境步记忆时使用 MAPPO 循环 `backbone`。
+   两者可组合，但窗口 W 与 `update.sequence_length` 不同，见[网络教程](networks.md#time)。
 6. 对候选配置使用多个训练种子和相同独立评估种子；最终测试集不参与反复调参。
 
 <a id="metrics"></a>
@@ -154,7 +161,9 @@ restored.trainer.load_checkpoint("benchmark-results/my-run/checkpoint.pt")
 next_metrics = restored.trainer.train_rollout([43])  # MAPPO：外部记录并恢复下一轮 seed
 ```
 
-必须在完整 update 后保存。配置不一致会拒绝加载；调参应作为新实验，不能暗中冒充相同
+必须在完整 update 后保存。当前 trainer schema 为 5，检查配置及 `input_spec` 中的历史/
+节点布局、静态邻接，再检查模型参数和 buffer；旧 schema 或配置/布局不一致会拒绝加载。
+调参应作为新实验，不能暗中冒充相同
 轨迹续训。模型权重 alone 不包含 optimizer 动量、replay、RNG 或进度。实验代码还需记录
 下一 round/seed、采样器 RNG、活跃环境的处理办法；当前 trainer 不保存环境状态。
 基准脚本自有恢复清单，普通示例不自动提供相同能力。
@@ -168,8 +177,9 @@ next_metrics = restored.trainer.train_rollout([43])  # MAPPO：外部记录并�
 | horizon 之前结束 | 环境真实 episode 长度，当前不支持部分 reset |
 | 全部动作非法 | adapter mask、终止观测、padding 占位动作 |
 | 循环策略每步像失忆 | 是否使用 act 丢状态，是否保存/回传 h/c |
-| config 旧/未知字段 | schema=2，MAPPO 网络宽度在 backbone 下 |
-| checkpoint 不兼容 | schema/config/网络形状，不能静默部分恢复 |
+| config 旧/未知字段 | YAML schema=2；五算法使用嵌套网络配置，MAAC 另有 embedding，QMIX 另有超网络字段 |
+| 历史/图网络构建失败 | adapter 的 observation_history / state_layout、邻接尺寸及网络使用位置 |
+| checkpoint 不兼容 | trainer schema=5；config/input_spec/参数/buffer，不能静默部分恢复 |
 | GPU 更慢 | CPU step、拷贝、微小网络、频繁指标同步；比较端到端 |
 | loss 有限但回报不升 | 奖励符号/尺度、探索、对手变化、策略评估与 baseline |
 
@@ -193,3 +203,5 @@ git diff --check
 [off_policy](../tests/test_off_policy.py)、[recurrent_mappo](../tests/test_recurrent_mappo.py)。
 配置/扩展：[typed_config](../tests/test_typed_config.py)、[experiment](../tests/test_experiment.py)。
 性能迁移：[migration_equivalence](../tests/test_migration_equivalence.py)、[speed_runtime](../tests/test_speed_runtime.py)。
+历史与图网络：[network_configuration](../tests/test_network_configuration.py)，覆盖窗口语义、
+因果 mask、图聚合、梯度归属、五算法更新和下一次更新恢复一致性。

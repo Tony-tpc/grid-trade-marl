@@ -40,8 +40,12 @@ value、终止标记，返回 None 并推进位置。`finish` 必须在写满后
 
 ### 展平与循环 mini-batch
 
-MLP：`[T,B,N,O] → [T*B,N,O]`，打乱环境时间位置。
-循环：转为 `[B,T,N,O]`，按 L 步切片。B=2、T=10、L=4 时共 6 段，每环境有效长度
+没有跨步循环 backbone：`[T,B,N,O] → [T*B,N,O]`，打乱环境时间位置。
+这也适用于带历史 GRU/LSTM/Transformer encoder、后接 MLP 的网络：窗口 W 已包含在
+每条观测中，窗口内顺序不被打乱，`update.sequence_length` 必须为 null。
+
+MAPPO actor 或 critic 使用跨步 GRU/LSTM backbone：转为 `[B,T,N,O]`，按 L 步切片。
+B=2、T=10、L=4 时共 6 段，每环境有效长度
 4、4、2，尾段补齐 2 步。mini_batch_size=8 每批最多放 2 条长 4 片段，不是 8 个玩家
 或 8 条轨迹。sequence_mask 排除 padding，补齐位置的动作 mask 仍须有合法动作。
 
@@ -70,6 +74,11 @@ record/record_many 返回 None；ready 只判断样本达到 batch_size。update
 update_batch 直接接收并迁移外部批次，不自动写入 replay。warm-up、每多少新 transition
 训练一次、每次多少梯度步属于实验调度，不能因此把 replay 接入 PPO。
 
+历史网络仍保存原始观测而非缓存的编码特征。每次更新从抽中的观测重建完整窗口，
+窗口内可反传，每条样本的 GRU/LSTM 初态为零；不跨 replay 条目携带 hidden state。
+因此现有 transition replay 可用于窗口编码，但不支持跨环境步循环 backbone。
+两种时间语义的形状与配置见[网络教程](networks.md#time).
+
 ## 优化器和日志
 
 optimizer(name)、parameters(name)、max_grad_norm(name) 返回现有实例、缓存参数、阈值。
@@ -86,8 +95,11 @@ mean_metrics 除以权重，以真实事件计算裁剪率。MAPPO loss 按有�
 
 ## Checkpoint 边界
 
-共有状态是模型、配置、runtime、Torch CPU/CUDA RNG。trainer schema=4，内部 runtime
-schema=3，不是同一个版本号。off-policy 另存 replay 和 NumPy RNG。
+共有状态是模型、配置、`input_spec`、runtime、Torch CPU/CUDA RNG。trainer schema=5，
+内部 OptimizerRuntime schema=3，不是同一个版本号。off-policy 另存 replay 和 NumPy RNG，
+on-policy 另存 mini-batch generator 状态。`input_spec` 包含影响前向的历史/节点索引及邻接。
+加载先检查版本、配置、完整 spec、模型键名/shape/dtype 和静态布局 buffer 值；布局变更即使
+输入总维度相同也会拒绝加载。schema 4 及更早文件不静默部分恢复。
 save_checkpoint 自动创建父目录并覆盖同名文件；load_checkpoint 必须在同配置实验上调用。
 外部组件需预先提供相同 catalog 和实现。完整状态使用 pickle，只读可信本地文件。
 

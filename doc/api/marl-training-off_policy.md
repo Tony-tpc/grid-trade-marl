@@ -331,7 +331,7 @@ Returns:
 
 ## ActorCriticUpdateConfig.resolved_critic_max_grad_norm
 
-[源码位置](../../marl/training/off_policy.py#L213) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L211) · [页内目录](#符号目录)
 
 ```python
 def resolved_critic_max_grad_norm(self) -> float | None
@@ -351,7 +351,7 @@ Returns:
 
 ## TemperatureActorCriticUpdateConfig
 
-[源码位置](../../marl/training/off_policy.py#L230) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L228) · [页内目录](#符号目录)
 
 `class TemperatureActorCriticUpdateConfig(ActorCriticUpdateConfig)`
 
@@ -368,7 +368,7 @@ temperature_max_grad_norm: float | None = None
 
 ## TemperatureActorCriticUpdateConfig.__post_init__
 
-[源码位置](../../marl/training/off_policy.py#L234) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L232) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -388,7 +388,7 @@ Returns:
 
 ## TemperatureActorCriticUpdateConfig.resolved_temperature_learning_rate
 
-[源码位置](../../marl/training/off_policy.py#L252) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L250) · [页内目录](#符号目录)
 
 ```python
 def resolved_temperature_learning_rate(self) -> float
@@ -408,7 +408,7 @@ Returns:
 
 ## TemperatureActorCriticUpdateConfig.resolved_temperature_max_grad_norm
 
-[源码位置](../../marl/training/off_policy.py#L264) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L262) · [页内目录](#符号目录)
 
 ```python
 def resolved_temperature_max_grad_norm(self) -> float | None
@@ -428,7 +428,7 @@ Returns:
 
 ## OffPolicyCollector
 
-[源码位置](../../marl/training/off_policy.py#L280) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L278) · [页内目录](#符号目录)
 
 `class OffPolicyCollector()`
 
@@ -438,7 +438,7 @@ Returns:
 
 ## OffPolicyCollector.__init__
 
-[源码位置](../../marl/training/off_policy.py#L283) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L281) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, environment: SyncVectorEnv, algorithm: OffPolicyActor, *, device: torch.device | str='cpu') -> None
@@ -460,7 +460,7 @@ Returns:
 
 ## OffPolicyCollector.rollout
 
-[源码位置](../../marl/training/off_policy.py#L304) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L302) · [页内目录](#符号目录)
 
 ```python
 def rollout(self, seeds: Sequence[int], *, deterministic: bool=False, action_transform: Callable[[np.ndarray], np.ndarray] | None=None) -> Iterator[tuple[Transition, ...]]
@@ -602,7 +602,7 @@ Returns:
 
 ## OffPolicyTrainer.update_batch
 
-[源码位置](../../marl/training/off_policy.py#L443) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L441) · [页内目录](#符号目录)
 
 ```python
 def update_batch(self, batch: MARLBatch) -> dict[str, float]
@@ -624,7 +624,7 @@ Returns:
 
 ## OffPolicyTrainer.state_dict
 
-[源码位置](../../marl/training/off_policy.py#L457) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L455) · [页内目录](#符号目录)
 
 ```python
 def state_dict(self) -> dict[str, Any]
@@ -637,14 +637,14 @@ Inputs:
     无显式参数；读取当前实例字段。
 
 Returns:
-    schema 4 状态字典；不包含外部采样器和环境当前位置。
+    schema 5 状态字典；保存网络/输入布局，不包含外部采样器和环境当前位置。
 ```
 
 <a id="offpolicytrainer-load_state_dict"></a>
 
 ## OffPolicyTrainer.load_state_dict
 
-[源码位置](../../marl/training/off_policy.py#L475) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L474) · [页内目录](#符号目录)
 
 ```python
 def load_state_dict(self, state: Mapping[str, Any]) -> None
@@ -664,7 +664,7 @@ Returns:
 
 ## OffPolicyTrainer.save_checkpoint
 
-[源码位置](../../marl/training/off_policy.py#L491) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L495) · [页内目录](#符号目录)
 
 ```python
 def save_checkpoint(self, path: str | Path) -> None
@@ -684,7 +684,7 @@ Returns:
 
 ## OffPolicyTrainer.load_checkpoint
 
-[源码位置](../../marl/training/off_policy.py#L502) · [页内目录](#符号目录)
+[源码位置](../../marl/training/off_policy.py#L506) · [页内目录](#符号目录)
 
 ```python
 def load_checkpoint(self, path: str | Path, *, map_location: str | torch.device='cpu') -> None

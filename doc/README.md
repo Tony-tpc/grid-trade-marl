@@ -11,6 +11,8 @@
 | 第一次安装、运行和保存训练 | [从零开始训练](training.md#start) |
 | 换成自己的环境、奖励、数据集 | [环境接入教程](environments.md) |
 | 换 actor、critic、backbone 或外部模块 | [模块扩展](extensions.md#modules) |
+| 配置历史窗口、Transformer、GNN 及五算法网络 | [网络配置教程](networks.md) |
+| 核对论文历史编码、默认值与尚未实现的部分 | [网络契约与论文差距](../docs/network_configuration.md) |
 | 实现论文新目标或新算法 | [自定义算法](extensions.md#algorithms) |
 | 调参、评估、排查不学习和恢复训练 | [实验与调参](training.md#tuning) |
 | 每个算法怎么计算 loss、如何更新 | [五个算法逐步说明](algorithms.md) |
@@ -41,7 +43,8 @@ GitHub 支持源码 `#L行号`；若本地阅读器不能定位行号，可打�
 - [新环境完整实现](examples/cue_environment.py)：固定长度、逐智能体奖励教学环境。
 - [训练与续训](examples/train_walkthrough.py)：MAPPO/MAAC、循环策略、自定义 critic。
 - [API 生成工具](tools/build_api.py)：只解析源码，不导入或运行算法。
-- [文档检查](tools/check_docs.py)：检查链接、锚点、源码行号和核心函数注释覆盖。
+- [文档检查](tools/check_docs.py)：检查根 README 及 doc/docs/examples/marl/benchmarks 下 Markdown
+  的本地链接、锚点、源码行号和核心函数注释覆盖；不验证外部网址可达性或论文结论。
 
 ```powershell
 .\.venv\Scripts\python.exe doc\tools\build_api.py

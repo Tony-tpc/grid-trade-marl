@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from marl.core.layout import HistoryLayout, StateLayout
 from marl.envs.base import (
     ActionKind,
     EnvironmentAdapter,
@@ -30,6 +31,8 @@ from marl.envs.mpe2_simple_adversary_adapter import (
 )
 
 __all__ = [
+    "HistoryLayout",
+    "StateLayout",
     "MemoryCueAdapter",
     "ActionKind",
     "EnvironmentAdapter",

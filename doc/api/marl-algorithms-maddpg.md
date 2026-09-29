@@ -95,7 +95,7 @@ target_update: SoftTargetConfig | HardTargetConfig = SoftTargetConfig()
 
 ## MADDPGConfig.validate
 
-[源码位置](../../marl/algorithms/maddpg.py#L74) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L73) · [页内目录](#符号目录)
 
 ```python
 def validate(self, spec: EnvironmentSpec) -> None
@@ -115,7 +115,7 @@ Returns:
 
 ## MADDPGConfig.build
 
-[源码位置](../../marl/algorithms/maddpg.py#L88) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L87) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> MADDPG
@@ -135,7 +135,7 @@ Returns:
 
 ## MADDPG
 
-[源码位置](../../marl/algorithms/maddpg.py#L100) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L99) · [页内目录](#符号目录)
 
 `class MADDPG(BaseMARLAlgorithm)`
 
@@ -196,7 +196,7 @@ Returns:
 
 ## MADDPG.compute_loss_bundle
 
-[源码位置](../../marl/algorithms/maddpg.py#L153) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L155) · [页内目录](#符号目录)
 
 ```python
 def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -216,7 +216,7 @@ Returns:
 
 ## MADDPG._validate_training_batch
 
-[源码位置](../../marl/algorithms/maddpg.py#L168) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L170) · [页内目录](#符号目录)
 
 ```python
 def _validate_training_batch(self, batch: MARLBatch) -> None
@@ -236,7 +236,7 @@ Returns:
 
 ## MADDPG.compute_critic_loss_bundle
 
-[源码位置](../../marl/algorithms/maddpg.py#L181) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L187) · [页内目录](#符号目录)
 
 ```python
 def compute_critic_loss_bundle(self, batch: MARLBatch, *, update_statistics: bool=False) -> LossBundle
@@ -259,7 +259,7 @@ Returns:
 
 ## MADDPG.compute_actor_loss_bundle
 
-[源码位置](../../marl/algorithms/maddpg.py#L220) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L234) · [页内目录](#符号目录)
 
 ```python
 def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -281,7 +281,7 @@ Returns:
 
 ## MADDPG.update
 
-[源码位置](../../marl/algorithms/maddpg.py#L252) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L266) · [页内目录](#符号目录)
 
 ```python
 def update(self, batch: MARLBatch, runtime: OptimizerRuntime) -> dict[str, float]
@@ -304,7 +304,7 @@ Returns:
 
 ## MADDPG.target_pairs
 
-[源码位置](../../marl/algorithms/maddpg.py#L294) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/maddpg.py#L306) · [页内目录](#符号目录)
 
 ```python
 def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]

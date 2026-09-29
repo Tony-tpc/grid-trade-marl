@@ -170,7 +170,8 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
             if array.shape != (evaluation_count, agents) or not np.isfinite(array).all():
                 raise ValueError("评估矩阵形状/数值错误")
         required = REQUIRED_METRICS["mappo"] | {
-            "actor_gradient_clip_rate", "critic_gradient_clip_rate",
+            "actor_gradient_clip_rate",
+            "critic_gradient_clip_rate",
             "rollout_explained_variance",
         }
         if row["variant_id"] != "mlp":
@@ -193,7 +194,7 @@ def validate_report(report: dict[str, Any]) -> dict[str, Any]:
         if hashlib.sha256(path.read_bytes()).hexdigest() != row["checkpoint"]["sha256"]:
             raise ValueError("checkpoint 校验值错误")
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if payload["schema_version"] != 4 or payload["config"] != row["config"]:
+        if payload["schema_version"] != 5 or payload["config"] != row["config"]:
             raise ValueError("checkpoint schema/config 不匹配")
         if payload["optimization"]["optimizer_step_count"] != row["optimizer_steps"]:
             raise ValueError("optimizer steps 不匹配")

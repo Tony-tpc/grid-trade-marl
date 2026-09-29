@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, TypeAlias, TypeVar, cast, get_args, get_origin, get_type_hints
+from typing import Any, Literal, TypeAlias, TypeVar, get_args, get_origin, get_type_hints
 
 import torch
 import yaml  # type: ignore[import-untyped]
@@ -18,7 +18,17 @@ from marl.algorithms.mappo import MAPPOConfig, MAPPOLossConfig
 from marl.algorithms.masac import MASACConfig, MASACLossConfig
 from marl.algorithms.qmix import QMIXConfig, QMIXLossConfig
 from marl.extensions import Buildable, Category, ExtensionCatalog, ExternalConfig
-from marl.models import BackboneConfig, GRUBackboneConfig, LSTMBackboneConfig, MLPBackboneConfig
+from marl.models import (
+    BackboneConfig,
+    EncoderConfig,
+    GNNBackboneConfig,
+    GRUBackboneConfig,
+    HistoryEncoderConfig,
+    IdentityEncoderConfig,
+    LSTMBackboneConfig,
+    MLPBackboneConfig,
+    TransformerBackboneConfig,
+)
 from marl.modules.critic import (
     AttentionQConfig,
     AttentionQNetwork,
@@ -77,11 +87,13 @@ def _flat(cls: type[T], data: object, location: str) -> T:
             if not any(type(value) is type(v) and value == v for v in allowed):
                 raise ValueError(f"{location}.{name} 必须是 {allowed}")
         elif hint == tuple[int, ...]:
-            if not isinstance(value, (list, tuple)) or not value or any(
+            if not isinstance(value, (list, tuple)) or any(
                 type(item) is not int or item < 1 for item in value
             ):
-                raise TypeError(f"{location}.{name} 必须为非空正整数列表")
+                raise TypeError(f"{location}.{name} 必须为正整数列表，允许空列表")
             values[name] = tuple(value)
+        elif is_dataclass(value) and type(value) in allowed:
+            pass  # 已由下方显式网络分支解析的冻结配置。
         elif hint is torch.dtype or torch.dtype in allowed:
             if value not in (None, "bf16"):
                 raise ValueError(f"{location}.{name} 只支持 null 或 bf16")
@@ -124,22 +136,48 @@ def _component(
     default = builtin()
     kind = values.get("kind", default.kind)
     if kind == default.kind:
-        if builtin in (IndependentDiscreteConfig, CentralizedValueConfig):
-            if unknown := set(values) - {"kind", "backbone"}:
-                raise ValueError(
-                    f"{category} 含旧/未知字段 {sorted(unknown)}；"
-                    "hidden_dim/layer_norm 请迁移到 backbone.output_dim/layer_norm"
-                )
-            backbone = _backbone(values.get("backbone", {}), f"{category}.backbone")
-            component = (IndependentDiscreteConfig(backbone=backbone)
-                         if builtin is IndependentDiscreteConfig
-                         else CentralizedValueConfig(backbone=backbone))
-            return cast(Buildable[T], component)
+        if unknown := set(values) - set(get_type_hints(builtin)):
+            raise ValueError(
+                f"{category} 含旧/未知字段 {sorted(unknown)}；"
+                "hidden_dim/layer_norm 请迁移到 backbone.output_dim/layer_norm"
+            )
+        if "encoder" in values:
+            values["encoder"] = _encoder(values["encoder"], f"{category}.encoder")
+        if values.get("graph") is not None:
+            values["graph"] = _flat(GNNBackboneConfig, values["graph"], f"{category}.graph")
+        if "backbone" in values:
+            values["backbone"] = (
+                _backbone(values["backbone"], f"{category}.backbone")
+                if builtin in (IndependentDiscreteConfig, CentralizedValueConfig)
+                else _flat(MLPBackboneConfig, values["backbone"], f"{category}.backbone")
+            )
+        for field in ("embedding", "value_backbone"):
+            if field in values:
+                values[field] = _flat(MLPBackboneConfig, values[field], f"{category}.{field}")
         return _flat(builtin, values, category)
     if not isinstance(kind, str) or catalog is None:
         raise ValueError(f"未知或不兼容的 {category} kind: {kind}")
     values.pop("kind")
     return catalog.configure(category, kind, values, capability)
+
+
+def _encoder(data: object, location: str) -> EncoderConfig:
+    """历史窗口尺寸只能来自 EnvironmentSpec；YAML 只声明网络超参数。"""
+    values = dict(_mapping(data, location))
+    kind = values.get("kind", "identity")
+    if kind == "identity":
+        return _flat(IdentityEncoderConfig, values, location)
+    if kind != "history" or set(values) - {"kind", "temporal"}:
+        raise ValueError(f"{location} 只支持 identity/history 及 temporal 网络配置")
+    temporal = _mapping(values.get("temporal", {}), f"{location}.temporal")
+    temporal_kind = temporal.get("kind", "lstm")
+    if temporal_kind == "gru":
+        return HistoryEncoderConfig(temporal=_flat(GRUBackboneConfig, temporal, location))
+    if temporal_kind == "lstm":
+        return HistoryEncoderConfig(temporal=_flat(LSTMBackboneConfig, temporal, location))
+    if temporal_kind == "transformer":
+        return HistoryEncoderConfig(temporal=_flat(TransformerBackboneConfig, temporal, location))
+    raise ValueError(f"{location}.temporal.kind 只支持 gru/lstm/transformer")
 
 
 def algorithm_config_from_dict(

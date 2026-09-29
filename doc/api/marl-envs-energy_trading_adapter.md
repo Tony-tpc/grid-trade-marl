@@ -22,7 +22,7 @@
 
 ## EnergyTradingAdapter
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L20) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L21) · [页内目录](#符号目录)
 
 `class EnergyTradingAdapter(EnvironmentAdapter)`
 
@@ -43,7 +43,7 @@
 
 ## EnergyTradingAdapter.__init__
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L35) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L36) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, environment: EnergyTradingEnv, action_kind: ActionKind) -> None
@@ -55,7 +55,7 @@ def __init__(self, environment: EnergyTradingEnv, action_kind: ActionKind) -> No
 
 ## EnergyTradingAdapter.spec
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L58) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L73) · [页内目录](#符号目录)
 
 ```python
 def spec(self) -> EnvironmentSpec
@@ -67,7 +67,7 @@ def spec(self) -> EnvironmentSpec
 
 ## EnergyTradingAdapter._action_mask
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L61) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L76) · [页内目录](#符号目录)
 
 ```python
 def _action_mask(self) -> NDArray[np.bool_] | None
@@ -79,7 +79,7 @@ def _action_mask(self) -> NDArray[np.bool_] | None
 
 ## EnergyTradingAdapter._snapshot
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L85) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L100) · [页内目录](#符号目录)
 
 ```python
 def _snapshot(self, rewards: NDArray[np.float32], terminated: bool=False, info: dict[str, float] | None=None) -> EnvironmentStep
@@ -91,7 +91,7 @@ def _snapshot(self, rewards: NDArray[np.float32], terminated: bool=False, info: 
 
 ## EnergyTradingAdapter.reset
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L106) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L121) · [页内目录](#符号目录)
 
 ```python
 def reset(self, seed: int | None=None) -> EnvironmentStep
@@ -103,7 +103,7 @@ def reset(self, seed: int | None=None) -> EnvironmentStep
 
 ## EnergyTradingAdapter.step
 
-[源码位置](../../marl/envs/energy_trading_adapter.py#L110) · [页内目录](#符号目录)
+[源码位置](../../marl/envs/energy_trading_adapter.py#L125) · [页内目录](#符号目录)
 
 ```python
 def step(self, actions: np.ndarray) -> EnvironmentStep

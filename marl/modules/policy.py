@@ -14,10 +14,17 @@ import torch
 from torch import Tensor, nn
 
 from marl.core import MARLModelOutput
+from marl.core.layout import HistoryLayout
 from marl.core.recurrent import RecurrentState, map_state, stack_states
 from marl.envs.base import EnvironmentSpec
-from marl.models import BackboneConfig, MLPBackboneConfig
-from marl.models.mlp import MLPBackbone
+from marl.models import (
+    BackboneConfig,
+    EncoderConfig,
+    GRUBackboneConfig,
+    IdentityEncoderConfig,
+    LSTMBackboneConfig,
+    MLPBackboneConfig,
+)
 from marl.modules.action_head import (
     ActionHeadOutput,
     DeterministicActionHead,
@@ -25,6 +32,9 @@ from marl.modules.action_head import (
     GaussianActionHead,
 )
 from marl.modules.actor import Actor
+
+_DEFAULT_ENCODER = IdentityEncoderConfig()
+_DEFAULT_BACKBONE = MLPBackboneConfig()
 
 
 @runtime_checkable
@@ -107,16 +117,25 @@ class IndependentDiscretePolicy(nn.Module):
         observation_dim: int,
         action_dim: int,
         backbone: BackboneConfig | None = None,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        history: HistoryLayout | None = None,
     ) -> None:
         super().__init__()
         backbone = backbone or MLPBackboneConfig()
+        if not isinstance(backbone, (MLPBackboneConfig, GRUBackboneConfig, LSTMBackboneConfig)):
+            raise ValueError(
+                "本地 actor backbone 只支持 MLP/GRU/LSTM；Transformer 使用 history encoder"
+            )
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
         self.actors = nn.ModuleList()
         for _ in range(num_agents):
-            network = backbone.build(observation_dim)
-            self.actors.append(Actor(network, DiscreteActionHead(network.output_dim, action_dim)))
+            inputs = encoder.build(observation_dim, history)
+            network = backbone.build(inputs.output_dim)
+            self.actors.append(
+                Actor(network, DiscreteActionHead(network.output_dim, action_dim), inputs)
+            )
         self.is_recurrent = network.is_recurrent
 
     def initial_state(self, batch_size: int) -> RecurrentState:
@@ -257,20 +276,23 @@ class IndependentDeterministicPolicy(nn.Module):
         num_agents: int,
         observation_dim: int,
         action_dim: int,
-        hidden_dim: int,
-        layer_norm: bool = False,
+        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        history: HistoryLayout | None = None,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
-                DeterministicActionHead(hidden_dim, action_dim),
+        if not isinstance(backbone, MLPBackboneConfig):
+            raise ValueError("离策略 policy 不支持跨环境步循环 backbone；请使用 history encoder")
+        self.actors = nn.ModuleList()
+        for _ in range(num_agents):
+            inputs = encoder.build(observation_dim, history)
+            network = backbone.build(inputs.output_dim)
+            self.actors.append(
+                Actor(network, DeterministicActionHead(network.output_dim, action_dim), inputs)
             )
-            for _ in range(num_agents)
-        )
 
     def act(
         self,
@@ -302,20 +324,23 @@ class IndependentGaussianPolicy(nn.Module):
         num_agents: int,
         observation_dim: int,
         action_dim: int,
-        hidden_dim: int,
-        layer_norm: bool = False,
+        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        history: HistoryLayout | None = None,
     ) -> None:
         super().__init__()
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
-        self.actors = nn.ModuleList(
-            Actor(
-                MLPBackbone(observation_dim, output_dim=hidden_dim, layer_norm=layer_norm),
-                GaussianActionHead(hidden_dim, action_dim),
+        if not isinstance(backbone, MLPBackboneConfig):
+            raise ValueError("离策略 policy 不支持跨环境步循环 backbone；请使用 history encoder")
+        self.actors = nn.ModuleList()
+        for _ in range(num_agents):
+            inputs = encoder.build(observation_dim, history)
+            network = backbone.build(inputs.output_dim)
+            self.actors.append(
+                Actor(network, GaussianActionHead(network.output_dim, action_dim), inputs)
             )
-            for _ in range(num_agents)
-        )
 
     def act(
         self,
@@ -342,17 +367,27 @@ class IndependentGaussianPolicy(nn.Module):
 class SharedDiscreteQPolicy(nn.Module):
     """同构智能体共享局部 Q 网络的 value-based 执行拓扑。"""
 
-    def __init__(self, observation_dim: int, action_dim: int, hidden_dim: int) -> None:
+    def __init__(
+        self,
+        observation_dim: int,
+        action_dim: int,
+        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        encoder: EncoderConfig = _DEFAULT_ENCODER,
+        history: HistoryLayout | None = None,
+    ) -> None:
         super().__init__()
         self.observation_dim = observation_dim
         self.action_dim = action_dim
-        self.backbone = MLPBackbone(observation_dim, output_dim=hidden_dim)
-        self.q_head = nn.Linear(hidden_dim, action_dim)
+        if not isinstance(backbone, MLPBackboneConfig):
+            raise ValueError("离策略 Q policy 不支持循环 backbone；请使用 history encoder")
+        self.encoder = encoder.build(observation_dim, history)
+        self.backbone = backbone.build(self.encoder.output_dim)
+        self.q_head = nn.Linear(self.backbone.output_dim, action_dim)
 
     def q_values(self, observations: Tensor) -> Tensor:
         if observations.shape[-1] != self.observation_dim:
             raise ValueError("observations 最后一维与策略 EnvironmentSpec 不一致")
-        values: Tensor = self.q_head(self.backbone(observations).features)
+        values: Tensor = self.q_head(self.backbone(self.encoder(observations)).features)
         return values
 
     def act(
@@ -375,6 +410,7 @@ class SharedDiscreteQPolicy(nn.Module):
 class IndependentDiscreteConfig:
     kind: Literal["independent_discrete"] = "independent_discrete"
     backbone: BackboneConfig = MLPBackboneConfig()
+    encoder: EncoderConfig = IdentityEncoderConfig()
 
     def build(self, spec: EnvironmentSpec) -> IndependentDiscretePolicy:
         return IndependentDiscretePolicy(
@@ -382,61 +418,56 @@ class IndependentDiscreteConfig:
             spec.observation_dim,
             spec.action_dim,
             self.backbone,
+            self.encoder,
+            spec.observation_history,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class IndependentDeterministicConfig:
     kind: Literal["independent_deterministic"] = "independent_deterministic"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    encoder: EncoderConfig = IdentityEncoderConfig()
 
     def build(self, spec: EnvironmentSpec) -> IndependentDeterministicPolicy:
         return IndependentDeterministicPolicy(
             spec.num_agents,
             spec.observation_dim,
             spec.action_dim,
-            self.hidden_dim,
-            self.layer_norm,
+            self.backbone,
+            self.encoder,
+            spec.observation_history,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class IndependentGaussianConfig:
     kind: Literal["independent_gaussian"] = "independent_gaussian"
-    hidden_dim: int = 128
-    layer_norm: bool = False
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    encoder: EncoderConfig = IdentityEncoderConfig()
 
     def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy:
         return IndependentGaussianPolicy(
             spec.num_agents,
             spec.observation_dim,
             spec.action_dim,
-            self.hidden_dim,
-            self.layer_norm,
+            self.backbone,
+            self.encoder,
+            spec.observation_history,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class SharedDiscreteQConfig:
     kind: Literal["shared_discrete_q"] = "shared_discrete_q"
-    hidden_dim: int = 128
-
-    def __post_init__(self) -> None:
-        if self.hidden_dim < 1:
-            raise ValueError("hidden_dim 必须大于 0")
+    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    encoder: EncoderConfig = IdentityEncoderConfig()
 
     def build(self, spec: EnvironmentSpec) -> SharedDiscreteQPolicy:
         return SharedDiscreteQPolicy(
             spec.observation_dim,
             spec.action_dim,
-            self.hidden_dim,
+            self.backbone,
+            self.encoder,
+            spec.observation_history,
         )

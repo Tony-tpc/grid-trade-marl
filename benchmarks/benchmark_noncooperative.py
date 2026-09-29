@@ -230,7 +230,11 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
                 backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)
             ),
             critic=AttentionQConfig(
-                hidden_dim=hidden, attention_heads=4, layer_norm=settings.layer_norm
+                embedding=MLPBackboneConfig(hidden_dims=(), output_dim=hidden,
+                                            layer_norm=settings.layer_norm),
+                backbone=MLPBackboneConfig(hidden_dims=(), output_dim=hidden,
+                                           layer_norm=settings.layer_norm),
+                attention_heads=4
             ),
             loss=MAACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
@@ -256,17 +260,17 @@ def _algorithm_config(name: str, settings: BenchmarkSettings) -> AlgorithmConfig
     if name == "maddpg":
         return MADDPGConfig(
             policy=IndependentDeterministicConfig(
-                hidden_dim=hidden, layer_norm=settings.layer_norm
+                backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)
             ),
-            critic=IndependentQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            critic=IndependentQConfig(backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)),
             loss=MADDPGLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
             update=ActorCriticUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
         )
     if name == "masac":
         return MASACConfig(
-            policy=IndependentGaussianConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
-            critic=TwinQConfig(hidden_dim=hidden, layer_norm=settings.layer_norm),
+            policy=IndependentGaussianConfig(backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)),
+            critic=TwinQConfig(backbone=MLPBackboneConfig(output_dim=hidden, layer_norm=settings.layer_norm)),
             loss=MASACLossConfig(normalize_targets=settings.normalize_targets),
             replay=replay,
             update=TemperatureActorCriticUpdateConfig(learning_rate=3e-4, max_grad_norm=10.0),
