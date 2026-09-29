@@ -44,6 +44,14 @@ class MAACLossConfig:
     entropy_coefficient: float = 0.01
 
     def __post_init__(self) -> None:
+        """检查 TD 与 entropy 系数为非负；不在此处构造网络。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            None；非法配置在构造阶段抛 ValueError。
+        """
         TDLossObjective(self.td_coefficient)
         EntropyObjective(self.entropy_coefficient)
 
@@ -64,12 +72,28 @@ class MAACConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
+        """验证配置版本和算法标识，并要求环境使用离散动作。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            None；不兼容时抛 ValueError。
+        """
         if self.schema_version != 2 or self.algorithm != "maac":
             raise ValueError("MAAC config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAAC 不支持当前动作类型")
 
     def build(self, spec: EnvironmentSpec) -> MAAC:
+        """以当前配置和环境尺寸直接构造 MAAC。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            新算法实例；optimizer/trainer 由 build_experiment 另外装配。
+        """
         return MAAC(spec, self)
 
 
@@ -82,6 +106,15 @@ class MAAC(BaseMARLAlgorithm):
     """
 
     def __init__(self, spec: EnvironmentSpec, config: MAACConfig) -> None:
+        """校验配置并装配 MAAC 的在线网络、数学目标及所需 target/统计模块。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+            config: 当前算法的冻结配置，提供网络、数学目标和更新超参数。
+
+        Returns:
+            None；可训练参数和 buffers 注册到当前 nn.Module。
+        """
         super().__init__(spec)
         config.validate(spec)
         self.config = config
@@ -105,6 +138,17 @@ class MAAC(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
+        """将各智能体观测映射为联合动作。在合法离散动作上采样或选择最大 logit。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            deterministic: 是否采用确定性动作；具体算法的例外见本函数说明。
+            action_mask: 可选 bool [...,N,A]，True 表示合法；连续动作必须为 None。
+            kwargs: 保留的接口扩展关键字；当前具体算法 act 不读取这些值。
+
+        Returns:
+            动作 Tensor：离散 [...,N]，连续 [...,N,A]；此接口不返回 log-prob/value。
+        """
         return self.policy.act(
             observations,
             deterministic=deterministic,
@@ -112,6 +156,14 @@ class MAAC(BaseMARLAlgorithm):
         ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """汇总各子目标用于数学诊断；只构图，不执行 backward、step 或 target 统计更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            LossBundle；total 是标量总目标，terms 是各项日志；正常训练仍应调用 update。
+        """
         critic = self.compute_critic_loss_bundle(batch)
         actors = [
             self.compute_actor_loss_bundle(batch, index)
@@ -135,6 +187,14 @@ class MAAC(BaseMARLAlgorithm):
         )
 
     def _validate_training_batch(self, batch: MARLBatch) -> None:
+        """校验公共 batch 形状以及 MAAC 所需的 actions/rewards/next_observations。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            None；字段缺失或形状不符抛 ValueError。
+        """
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MAAC 训练需要 actions/rewards/next_observations")
@@ -142,7 +202,18 @@ class MAAC(BaseMARLAlgorithm):
     def compute_critic_loss_bundle(
         self, batch: MARLBatch, *, update_statistics: bool = False
     ) -> LossBundle:
-        """使用 replay 联合动作回归逐智能体 TD target。"""
+        """使用 replay 联合动作拟合逐智能体 TD target；下一值来自target
+            policy、attention Q 及熵正则。
+
+        使用 replay 联合动作回归逐智能体 TD target。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            update_statistics: 是否更新逐智能体 target 尺度统计；诊断调用默认 False。
+
+        Returns:
+            critic LossBundle；target 无梯度，只有 terminated 阻止 bootstrap；可选更新尺度统计。
+        """
 
         self._validate_training_batch(batch)
         assert batch.actions is not None and batch.rewards is not None
@@ -186,7 +257,18 @@ class MAAC(BaseMARLAlgorithm):
         *,
         current_q_values: Tensor | None = None,
     ) -> LossBundle:
-        """只构建一个智能体的 policy loss；其他 actor 不接收梯度。"""
+        """构建单智能体反事实策略目标；固定 Q 表和其他玩家动作。
+
+        只构建一个智能体的 policy loss；其他 actor 不接收梯度。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            agent_index: 目标智能体的零起始索引，必须位于 [0,N)。
+            current_q_values: 可复用的当前联合动作 Q 表 [...,N,A]；None 时内部无梯度采样并计算。
+
+        Returns:
+            actor LossBundle；只构图，不执行 optimizer.step。
+        """
 
         self._validate_training_batch(batch)
         if not 0 <= agent_index < self.spec.num_agents:
@@ -222,7 +304,18 @@ class MAAC(BaseMARLAlgorithm):
     def update(
         self, batch: MARLBatch, runtime: OptimizerRuntime
     ) -> dict[str, float]:
-        """按 critic → 每个智能体 policy → target 的 MAAC 顺序更新。"""
+        """对一批 replay 经验按 critic → 逐智能体 actor → target
+            顺序更新参数；复用基类 optimize。
+
+        按 critic → 每个智能体 policy → target 的 MAAC 顺序更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            runtime: 已装配的命名 optimizer、裁剪上限、目标更新器、随机生成器及计数状态。
+
+        Returns:
+            命名 float 指标；runtime.sync_metrics=False 时返回 {}，之后用 flush_metrics 获取。
+        """
 
         device = batch.observations.device
         with runtime.autocast(device):
@@ -281,6 +374,14 @@ class MAAC(BaseMARLAlgorithm):
         return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        """声明目标网络与在线网络的配对，供 runtime.finish 统一同步。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            有序 (target, online) 对；基类默认空，不在本函数执行同步。
+        """
         return (
             (self.get_submodule("target_policy"), self.get_submodule("policy")),
             (self.get_submodule("target_critic"), self.get_submodule("critic")),

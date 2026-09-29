@@ -29,6 +29,14 @@ class QMIXLossConfig:
     td_coefficient: float = 1.0
 
     def __post_init__(self) -> None:
+        """检查团队 TD 损失系数为非负；不在此处构造网络。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            None；非法配置在构造阶段抛 ValueError。
+        """
         TDLossObjective(self.td_coefficient)
 
 
@@ -48,6 +56,14 @@ class QMIXConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
+        """验证配置版本和算法标识，并要求环境使用离散动作。QMIX 还要求共享奖励。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            None；不兼容时抛 ValueError。
+        """
         if self.schema_version != 2 or self.algorithm != "qmix":
             raise ValueError("QMIX config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
@@ -56,11 +72,28 @@ class QMIXConfig:
             raise ValueError("QMIX 要求共享团队奖励")
 
     def build(self, spec: EnvironmentSpec) -> QMIX:
+        """以当前配置和环境尺寸直接构造 QMIX。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            新算法实例；optimizer/trainer 由 build_experiment 另外装配。
+        """
         return QMIX(spec, self)
 
 
 class QMIX(BaseMARLAlgorithm):
     def __init__(self, spec: EnvironmentSpec, config: QMIXConfig) -> None:
+        """校验配置并装配 QMIX 的在线网络、数学目标及所需 target/统计模块。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+            config: 当前算法的冻结配置，提供网络、数学目标和更新超参数。
+
+        Returns:
+            None；可训练参数和 buffers 注册到当前 nn.Module。
+        """
         super().__init__(spec)
         config.validate(spec)
         self.config = config
@@ -79,6 +112,18 @@ class QMIX(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
+        """将各智能体观测映射为联合动作。始终返回合法动作中局部 Q
+            最大的动作，deterministic 参数不改变行为。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            deterministic: 是否采用确定性动作；具体算法的例外见本函数说明。
+            action_mask: 可选 bool [...,N,A]，True 表示合法；连续动作必须为 None。
+            kwargs: 保留的接口扩展关键字；当前具体算法 act 不读取这些值。
+
+        Returns:
+            动作 Tensor：离散 [...,N]，连续 [...,N,A]；此接口不返回 log-prob/value。
+        """
         return self.policy.act(
             observations,
             deterministic=True,
@@ -86,6 +131,14 @@ class QMIX(BaseMARLAlgorithm):
         ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """验证共享奖励后，混合局部 Q 得到团队 Q；在线选下一动作、target 评估，构造 TD 目标。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            团队 TD LossBundle；要求 actions/rewards/next_observations/state/next_state。
+        """
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if any(
             value is None
@@ -146,7 +199,17 @@ class QMIX(BaseMARLAlgorithm):
     def update(
         self, batch: MARLBatch, runtime: OptimizerRuntime
     ) -> dict[str, float]:
-        """QMIX 仅执行一次 value optimizer，再更新 target。"""
+        """对一批 replay 经验按 value → target 顺序更新参数；复用基类 optimize。
+
+        QMIX 仅执行一次 value optimizer，再更新 target。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            runtime: 已装配的命名 optimizer、裁剪上限、目标更新器、随机生成器及计数状态。
+
+        Returns:
+            命名 float 指标；runtime.sync_metrics=False 时返回 {}，之后用 flush_metrics 获取。
+        """
 
         with runtime.autocast(batch.observations.device):
             bundle = self.compute_loss_bundle(batch)
@@ -163,6 +226,14 @@ class QMIX(BaseMARLAlgorithm):
         return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        """声明目标网络与在线网络的配对，供 runtime.finish 统一同步。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            有序 (target, online) 对；基类默认空，不在本函数执行同步。
+        """
         return (
             (self.get_submodule("target_policy"), self.get_submodule("policy")),
             (self.get_submodule("target_mixer"), self.get_submodule("mixer")),

@@ -1,5 +1,9 @@
 # MARL：可直接阅读和修改的多智能体算法库
 
+完整中文手册：[阅读导航](doc/README.md) · [函数级 API](doc/api/README.md) ·
+[新环境接入](doc/environments.md) · [自定义模块与算法](doc/extensions.md) ·
+[调参、训练与续训](doc/training.md)。
+
 配置与算法实现放在一起，组件配置与组件实现放在一起。通常从要修改的算法文件开始，
 查看文件顶部的 Config 和算法构造函数，就能找到网络、loss 和训练参数的落点。
 
@@ -178,7 +182,7 @@ YAML 不能填写 Python 类路径，也不会触发动态导入或隐式全局�
 
 新增 `EnvironmentAdapter`，实现 `spec`、`reset(seed)`、`step(actions)`，
 并对返回值调用 `validate_step()`。数据集、物理约束、结算规则和动作编解码留在环境中。
-新环境的 YAML 建模与构造入口放在环境层；当前 `envs/config.py` 明确构造能源环境。
+新环境的 YAML 建模与构造入口放在环境层；当前 `envs/config.py` 分别提供能源与 MPE2 环境的显式构造入口。
 
 - observations：`[*B,N,O]`；state：`[*B,S]`。
 - 离散 actions：`[*B,N]`；连续 actions：`[*B,N,A]`。

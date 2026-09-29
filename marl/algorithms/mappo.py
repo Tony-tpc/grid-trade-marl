@@ -36,6 +36,14 @@ class MAPPOLossConfig:
     normalize_targets: bool = False
 
     def __post_init__(self) -> None:
+        """检查 PPO clip_ratio 位于 (0,1)，value/entropy 系数为非负。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            None；非法配置在构造阶段抛 ValueError。
+        """
         PPOClipObjective(self.clip_ratio)
         ValueMSEObjective(self.value_coefficient)
         EntropyObjective(self.entropy_coefficient)
@@ -55,12 +63,28 @@ class MAPPOConfig:
     update: PPOUpdateConfig = PPOUpdateConfig()
 
     def validate(self, spec: EnvironmentSpec) -> None:
+        """验证配置版本和算法标识，并要求环境使用离散动作。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            None；不兼容时抛 ValueError。
+        """
         if self.schema_version != 2 or self.algorithm != "mappo":
             raise ValueError("MAPPO config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.DISCRETE:
             raise ValueError("MAPPO 不支持当前动作类型")
 
     def build(self, spec: EnvironmentSpec) -> MAPPO:
+        """以当前配置和环境尺寸直接构造 MAPPO。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            新算法实例；optimizer/trainer 由 build_experiment 另外装配。
+        """
         return MAPPO(spec, self)
 
 
@@ -72,6 +96,15 @@ class MAPPO(BaseMARLAlgorithm):
     """
 
     def __init__(self, spec: EnvironmentSpec, config: MAPPOConfig) -> None:
+        """校验配置并装配 MAPPO 的在线网络、数学目标及所需 target/统计模块。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+            config: 当前算法的冻结配置，提供网络、数学目标和更新超参数。
+
+        Returns:
+            None；可训练参数和 buffers 注册到当前 nn.Module。
+        """
         super().__init__(spec)
         config.validate(spec)
         self.config = config
@@ -101,6 +134,16 @@ class MAPPO(BaseMARLAlgorithm):
         state: Tensor | None,
         value_state: RecurrentState,
     ) -> tuple[Tensor, RecurrentState]:
+        """用全局 state（缺失时拼接联合观测）计算逐智能体 value，并返回更新后的 critic 状态。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            state: 可选全局 state [...,S]；None 时使用展平联合观测，尺寸必须与 critic 输入一致。
+            value_state: 处理当前观测之前的 critic 状态 [K,B,H]；LSTM 为 (h,c)，MLP 为 None。
+
+        Returns:
+            (values [...,N], 新 critic 状态)；无状态 critic 返回 None 状态。
+        """
         critic_input = state if state is not None else observations.flatten(-2)
         if self.recurrent_critic:
             assert isinstance(self.critic, RecurrentValueNetwork)
@@ -116,7 +159,18 @@ class MAPPO(BaseMARLAlgorithm):
         *,
         value_state: RecurrentState = None,
     ) -> Tensor:
-        """bootstrap 与 value loss 共用前向；不采样 actor，也不改变调用方状态。"""
+        """仅估计 value；不调用 actor。函数本身不关闭梯度，bootstrap 调用方须使用 no_grad。
+
+        bootstrap 与 value loss 共用前向；不采样 actor，也不改变调用方状态。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            state: 可选全局 state [...,S]；None 时使用展平联合观测，尺寸必须与 critic 输入一致。
+            value_state: 处理当前观测之前的 critic 状态 [K,B,H]；LSTM 为 (h,c)，MLP 为 None。
+
+        Returns:
+            逐智能体 value Tensor [...,N]；不返回新隐藏状态。
+        """
         return self._values_with_state(observations, state, value_state)[0]
 
     def sample(
@@ -129,6 +183,19 @@ class MAPPO(BaseMARLAlgorithm):
         policy_state: RecurrentState = None,
         value_state: RecurrentState = None,
     ) -> MARLModelOutput:
+        """同时调用 actor 和 critic，为采集返回动作、log-prob、value 及下一时刻隐藏状态。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            state: 可选全局 state [...,S]；None 时使用展平联合观测，尺寸必须与 critic 输入一致。
+            deterministic: 是否采用确定性动作；具体算法的例外见本函数说明。
+            action_mask: 可选 bool [...,N,A]，True 表示合法；连续动作必须为 None。
+            policy_state: 处理当前观测之前的 actor 状态 [K,B,N,H]；LSTM 为 (h,c)，MLP 为 None。
+            value_state: 处理当前观测之前的 critic 状态 [K,B,H]；LSTM 为 (h,c)，MLP 为 None。
+
+        Returns:
+            MARLModelOutput：actions [...,N]，log_prob/entropy/values [...,N]，以及新 h/c。
+        """
         if self.recurrent_policy:
             output = self.policy.act(
                 observations,
@@ -159,6 +226,17 @@ class MAPPO(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
+        """将各智能体观测映射为联合动作。循环 actor 必须改用 sample 并持续传递状态。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            deterministic: 是否采用确定性动作；具体算法的例外见本函数说明。
+            action_mask: 可选 bool [...,N,A]，True 表示合法；连续动作必须为 None。
+            kwargs: 保留的接口扩展关键字；当前具体算法 act 不读取这些值。
+
+        Returns:
+            动作 Tensor：离散 [...,N]，连续 [...,N,A]；此接口不返回 log-prob/value。
+        """
         if self.recurrent_policy:
             raise RuntimeError("循环 actor 请使用 sample() 并回传 policy_state，不能每步丢弃记忆")
         return self.policy.act(
@@ -168,6 +246,14 @@ class MAPPO(BaseMARLAlgorithm):
         ).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """汇总各子目标用于数学诊断；只构图，不执行 backward、step 或 target 统计更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            LossBundle；total 是标量总目标，terms 是各项日志；正常训练仍应调用 update。
+        """
         policy = self.compute_policy_loss_bundle(batch)
         value = self.compute_value_loss_bundle(batch)
         terms = {**policy.terms, **value.terms}
@@ -175,6 +261,16 @@ class MAPPO(BaseMARLAlgorithm):
         return LossBundle(total=terms["loss"], terms=terms)
 
     def _validate_training_batch(self, batch: MARLBatch) -> None:
+        """校验公共 batch 形状以及 MAPPO 所需的 actions 及 extras 中
+            old_log_prob/advantages/returns；循环路径还校验状态和
+            [B,T,N,O]。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            None；字段缺失或形状不符抛 ValueError。
+        """
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if not self.recurrent_policy and batch.policy_state is not None:
             raise ValueError("无状态 policy 不接受 batch.policy_state")
@@ -193,7 +289,16 @@ class MAPPO(BaseMARLAlgorithm):
                 raise ValueError(f"MAPPO {name} 必须具有逐智能体形状 {expected_shape}")
 
     def compute_policy_loss_bundle(self, batch: MARLBatch) -> LossBundle:
-        """只构建 policy+entropy 计算图，供 actor optimizer 独立更新。"""
+        """按旧策略 log-prob 与 advantage 计算 PPO clipped surrogate 和熵正则，排除 padding。
+
+        只构建 policy+entropy 计算图，供 actor optimizer 独立更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            LossBundle：policy/entropy 标量目标和 KL、clip fraction、entropy 等诊断；不 step。
+        """
 
         self._validate_training_batch(batch)
         assert batch.actions is not None
@@ -231,7 +336,16 @@ class MAPPO(BaseMARLAlgorithm):
         )
 
     def compute_value_loss_bundle(self, batch: MARLBatch) -> LossBundle:
-        """只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。"""
+        """回归逐智能体 return；可选围绕 old_values 做 value clipping，排除 padding。
+
+        只构建 critic 计算图；可选使用 rollout 保存的 old value 做 clipping。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            仅包含 critic 目标的 LossBundle；不更新 target 尺度统计或参数。
+        """
 
         self._validate_training_batch(batch)
         values = batch.valid(
@@ -262,7 +376,19 @@ class MAPPO(BaseMARLAlgorithm):
         )
 
     def update(self, experience: PreparedRollout, runtime: OptimizerRuntime) -> dict[str, float]:
-        """在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。"""
+        """消费一次 fresh rollout，逐 epoch/minibatch 执行 actor
+            → critic 更新并汇总有效样本指标。
+
+        在 fresh rollout 上按 policy→critic 执行 PPO 多轮 mini-batch 更新。
+
+        Args:
+            experience: 尚未消费的 PreparedRollout；携带固定
+                old log-prob/value、advantage、return。
+            runtime: 已装配的命名 optimizer、裁剪上限、目标更新器、随机生成器及计数状态。
+
+        Returns:
+            命名 float 指标；关闭 runtime 同步时返回 {}。副作用：参数、统计、计数与消费标记改变。
+        """
 
         # 在修改 target 统计之前拒绝已消费对象，失败调用不能改变算法状态。
         if experience.consumed:

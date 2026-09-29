@@ -45,6 +45,14 @@ class MADDPGLossConfig:
     normalize_targets: bool = False
 
     def __post_init__(self) -> None:
+        """检查 TD 损失系数为非负；不在此处构造网络。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            None；非法配置在构造阶段抛 ValueError。
+        """
         TDLossObjective(self.td_coefficient)
 
 
@@ -64,12 +72,28 @@ class MADDPGConfig:
 
 
     def validate(self, spec: EnvironmentSpec) -> None:
+        """验证配置版本和算法标识，并要求环境使用连续动作。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            None；不兼容时抛 ValueError。
+        """
         if self.schema_version != 2 or self.algorithm != "maddpg":
             raise ValueError("MADDPG config 的 algorithm/schema_version 不匹配")
         if spec.action_kind != ActionKind.CONTINUOUS:
             raise ValueError("MADDPG 不支持当前动作类型")
 
     def build(self, spec: EnvironmentSpec) -> MADDPG:
+        """以当前配置和环境尺寸直接构造 MADDPG。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+
+        Returns:
+            新算法实例；optimizer/trainer 由 build_experiment 另外装配。
+        """
         return MADDPG(spec, self)
 
 
@@ -82,6 +106,15 @@ class MADDPG(BaseMARLAlgorithm):
     但网络参数独立，可学习不同的博弈策略。
     """
     def __init__(self, spec: EnvironmentSpec, config: MADDPGConfig) -> None:
+        """校验配置并装配 MADDPG 的在线网络、数学目标及所需 target/统计模块。
+
+        Args:
+            spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
+            config: 当前算法的冻结配置，提供网络、数学目标和更新超参数。
+
+        Returns:
+            None；可训练参数和 buffers 注册到当前 nn.Module。
+        """
         super().__init__(spec)
         config.validate(spec)
         self.config = config
@@ -102,10 +135,30 @@ class MADDPG(BaseMARLAlgorithm):
         action_mask: Tensor | None = None,
         **kwargs: Tensor,
     ) -> Tensor:
-        """独立 Actor 并行执行；DDPG 探索噪声由采样器加在返回动作上。"""
+        """将各智能体观测映射为联合动作。始终返回确定性动作，探索噪声应由采集器加入。
+
+        独立 Actor 并行执行；DDPG 探索噪声由采样器加在返回动作上。
+
+        Args:
+            observations: 浮点观测 [...,N,O]；循环单步为 [B,N,O]，序列为 [B,T,N,O]。
+            deterministic: 是否采用确定性动作；具体算法的例外见本函数说明。
+            action_mask: 可选 bool [...,N,A]，True 表示合法；连续动作必须为 None。
+            kwargs: 保留的接口扩展关键字；当前具体算法 act 不读取这些值。
+
+        Returns:
+            动作 Tensor：离散 [...,N]，连续 [...,N,A]；此接口不返回 log-prob/value。
+        """
         return self.policy.act(observations, deterministic=True, action_mask=action_mask).actions
 
     def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle:
+        """汇总各子目标用于数学诊断；只构图，不执行 backward、step 或 target 统计更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            LossBundle；total 是标量总目标，terms 是各项日志；正常训练仍应调用 update。
+        """
         critic = self.compute_critic_loss_bundle(batch)
         actor = self.compute_actor_loss_bundle(batch)
         terms = {**critic.terms, **actor.terms}
@@ -113,6 +166,14 @@ class MADDPG(BaseMARLAlgorithm):
         return LossBundle(terms["loss"], terms)
 
     def _validate_training_batch(self, batch: MARLBatch) -> None:
+        """校验公共 batch 形状以及 MADDPG 所需的 actions/rewards/next_observations。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            None；字段缺失或形状不符抛 ValueError。
+        """
         batch.validate(self.spec.num_agents, self.spec.observation_dim)
         if batch.actions is None or batch.rewards is None or batch.next_observations is None:
             raise ValueError("MADDPG 训练需要 actions/rewards/next_observations")
@@ -120,7 +181,17 @@ class MADDPG(BaseMARLAlgorithm):
     def compute_critic_loss_bundle(
         self, batch: MARLBatch, *, update_statistics: bool = False
     ) -> LossBundle:
-        """使用 replay 联合动作更新全部独立 centralized critics。"""
+        """使用 replay 联合动作拟合逐智能体 TD target；下一值来自target actor 与独立集中式 Q。
+
+        使用 replay 联合动作更新全部独立 centralized critics。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            update_statistics: 是否更新逐智能体 target 尺度统计；诊断调用默认 False。
+
+        Returns:
+            critic LossBundle；target 无梯度，只有 terminated 阻止 bootstrap；可选更新尺度统计。
+        """
 
         self._validate_training_batch(batch)
         assert batch.actions is not None and batch.rewards is not None
@@ -147,7 +218,16 @@ class MADDPG(BaseMARLAlgorithm):
             **agent_statistics("reward", batch.rewards)})
 
     def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle:
-        """固定每个 Q_i 及其他 actor 动作，只更新对应 Actor_i。"""
+        """冻结 critic 参数并隔离其他 actor 动作，构建每个智能体自己的策略目标。
+
+        固定每个 Q_i 及其他 actor 动作，只更新对应 Actor_i。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+
+        Returns:
+            actor LossBundle；只构图，不执行 optimizer.step。
+        """
 
         self._validate_training_batch(batch)
         # ------------------- Actor Loss ------------------------
@@ -172,7 +252,17 @@ class MADDPG(BaseMARLAlgorithm):
     def update(
         self, batch: MARLBatch, runtime: OptimizerRuntime
     ) -> dict[str, float]:
-        """按 critic → actor → target 的 MADDPG 顺序更新。"""
+        """对一批 replay 经验按 critic → actor → target 顺序更新参数；复用基类 optimize。
+
+        按 critic → actor → target 的 MADDPG 顺序更新。
+
+        Args:
+            batch: MARLBatch；观测 [...,N,O]，奖励/终止标记 [...,N]，字段要求见说明。
+            runtime: 已装配的命名 optimizer、裁剪上限、目标更新器、随机生成器及计数状态。
+
+        Returns:
+            命名 float 指标；runtime.sync_metrics=False 时返回 {}，之后用 flush_metrics 获取。
+        """
 
         device = batch.observations.device
         with runtime.autocast(device):
@@ -202,6 +292,14 @@ class MADDPG(BaseMARLAlgorithm):
         return runtime.export_metrics(metrics)
 
     def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]:
+        """声明目标网络与在线网络的配对，供 runtime.finish 统一同步。
+
+        Inputs:
+            无显式参数；读取当前实例字段。
+
+        Returns:
+            有序 (target, online) 对；基类默认空，不在本函数执行同步。
+        """
         return (
             (self.get_submodule("target_policy"), self.get_submodule("policy")),
             (self.get_submodule("target_critics"), self.get_submodule("critics")),
