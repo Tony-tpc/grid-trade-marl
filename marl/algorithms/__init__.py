@@ -5,6 +5,7 @@ from marl.algorithms.maddpg import MADDPG, MADDPGConfig
 from marl.algorithms.mappo import MAPPO, MAPPOConfig
 from marl.algorithms.masac import MASAC, MASACConfig
 from marl.algorithms.qmix import QMIX, QMIXConfig
+from marl.algorithms.sn_mappo import SNMAPPO, SNMAPPOConfig
 
 __all__ = [
     "BaseMARLAlgorithm",
@@ -13,4 +14,5 @@ __all__ = [
     "MADDPG", "MADDPGConfig",
     "MASAC", "MASACConfig",
     "QMIX", "QMIXConfig",
+    "SNMAPPO", "SNMAPPOConfig",
 ]

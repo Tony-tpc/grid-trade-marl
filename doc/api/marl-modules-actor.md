@@ -87,7 +87,7 @@ def forward(self, observations: Tensor, *, deterministic: bool=False, action_mas
 [源码位置](../../marl/modules/actor.py#L70) · [页内目录](#符号目录)
 
 ```python
-def evaluate_actions(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, **backbone_kwargs: Tensor) -> ActionHeadOutput
+def evaluate_actions(self, observations: Tensor, actions: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, raw_actions: Tensor | None=None, **backbone_kwargs: Tensor) -> ActionHeadOutput
 ```
 
 在同一 Actor 中评估给定动作，供 PPO 等 on-policy 目标使用。
@@ -96,7 +96,7 @@ def evaluate_actions(self, observations: Tensor, actions: Tensor, *, action_mask
 
 ## Actor.discrete_logits
 
-[源码位置](../../marl/modules/actor.py#L85) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/actor.py#L88) · [页内目录](#符号目录)
 
 ```python
 def discrete_logits(self, observations: Tensor, *, action_mask: Tensor | None=None, hidden_state: RecurrentState=None, **backbone_kwargs: Tensor) -> Tensor

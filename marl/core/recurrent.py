@@ -9,6 +9,34 @@ from torch import Tensor
 RecurrentState: TypeAlias = Tensor | tuple[Tensor, Tensor] | None
 
 
+def cat_states(states: Sequence[RecurrentState], dim: int) -> RecurrentState:
+    """沿 batch 维拼接同类 GRU/LSTM 状态；None 不得与非空状态混合。
+
+    Args:
+        states: 同构 GRU Tensor、LSTM (h,c) 或全 None；初态 [K,B,(N),H]，
+            历史 [T,K,B,(N),H]，非拼接维必须相等。
+        dim: 拼接维；初态的 B 为 1，历史的 B 为 2。
+
+    Returns:
+        拼接后的同类状态，不修改输入。
+    """
+    if not states:
+        raise ValueError("states 不能为空")
+    first = states[0]
+    if first is None:
+        if any(s is not None for s in states):
+            raise ValueError("循环状态类型必须一致")
+        return None
+    if isinstance(first, tuple):
+        if not all(isinstance(s, tuple) and len(s) == 2 for s in states):
+            raise ValueError("LSTM 状态必须全部为 (h,c)")
+        pairs = [s for s in states if isinstance(s, tuple)]
+        return torch.cat([s[0] for s in pairs], dim), torch.cat([s[1] for s in pairs], dim)
+    if not all(isinstance(s, Tensor) for s in states):
+        raise ValueError("GRU 状态必须全部为 Tensor")
+    return torch.cat([s for s in states if isinstance(s, Tensor)], dim)
+
+
 def map_state(state: RecurrentState, function: Callable[[Tensor], Tensor]) -> RecurrentState:
     """对 GRU 的 h 或 LSTM 的 (h,c) 做同一种搬运、索引或 detach 操作。"""
     if state is None:

@@ -14,15 +14,18 @@ from marl.algorithms.maddpg import MADDPG, MADDPGConfig
 from marl.algorithms.mappo import MAPPO, MAPPOConfig
 from marl.algorithms.masac import MASAC, MASACConfig
 from marl.algorithms.qmix import QMIXConfig
+from marl.algorithms.sn_mappo import SNMAPPO, SNMAPPOConfig
 from marl.config import AlgorithmConfig, config_to_dict
 from marl.envs.base import EnvironmentAdapter, EnvironmentSpec
+from marl.envs.sequential import SequentialEnvironment
 from marl.runtime import SyncVectorEnv, TensorReplayBuffer
 from marl.training.off_policy import OffPolicyTrainer
 from marl.training.on_policy import OnPolicyTrainer
 from marl.training.optimization import OptimizerRuntime
+from marl.training.sequential import SequentialTrainer
 
 A = TypeVar("A", bound=BaseMARLAlgorithm, covariant=True)
-T = TypeVar("T", OnPolicyTrainer, OffPolicyTrainer, covariant=True)
+T = TypeVar("T", OnPolicyTrainer, OffPolicyTrainer, SequentialTrainer, covariant=True)
 Environment = SyncVectorEnv | EnvironmentAdapter | EnvironmentSpec
 OffConfig = MAACConfig | MADDPGConfig | MASACConfig | QMIXConfig
 
@@ -34,6 +37,16 @@ class Experiment(Generic[A, T]):
     config: AlgorithmConfig
     algorithm: A
     trainer: T
+
+
+@overload
+def build_experiment(
+    environment: Environment,
+    config: SNMAPPOConfig,
+    *,
+    device: str | torch.device = "cpu",
+    seed: int = 42,
+) -> Experiment[SNMAPPO, SequentialTrainer]: ...
 
 
 @overload
@@ -65,6 +78,7 @@ def build_experiment(
     seed: int = 42,
 ) -> (
     Experiment[BaseMARLAlgorithm, OnPolicyTrainer] | Experiment[BaseMARLAlgorithm, OffPolicyTrainer]
+    | Experiment[SNMAPPO, SequentialTrainer]
 ): ...
 
 
@@ -76,6 +90,7 @@ def build_experiment(
     seed: int = 42,
 ) -> (
     Experiment[BaseMARLAlgorithm, OnPolicyTrainer] | Experiment[BaseMARLAlgorithm, OffPolicyTrainer]
+    | Experiment[SNMAPPO, SequentialTrainer]
 ):
     """先绑定 spec、构造网络并移动设备，再创建 optimizer。
 
@@ -85,6 +100,30 @@ def build_experiment(
     torch.manual_seed(seed)
     spec = environment if isinstance(environment, EnvironmentSpec) else environment.spec
     snapshot = config_to_dict(config)
+    if isinstance(config, SNMAPPOConfig):
+        if not isinstance(environment, SequentialEnvironment):
+            raise TypeError("SN-MAPPO 需要明确的 sequential_spec/commit_leader/settle 环境")
+        sequential = config.build(environment.sequential_spec).to(device)
+
+        def role_runtime(role: MAPPO) -> OptimizerRuntime:
+            """按角色 MAPPO 配置装配互不重叠的 actor/critic Adam、裁剪与 minibatch RNG。"""
+            settings = role.config.update
+            return OptimizerRuntime({
+                "actor": torch.optim.Adam(role.policy.parameters(),
+                                          lr=settings.resolved_actor_learning_rate),
+                "critic": torch.optim.Adam(role.critic.parameters(),
+                                           lr=settings.resolved_critic_learning_rate),
+            }, {"actor": settings.resolved_actor_max_grad_norm,
+                "critic": settings.resolved_critic_max_grad_norm},
+                generator=torch.Generator(device=torch.device(device)).manual_seed(seed))
+
+        sequential_trainer = SequentialTrainer(
+            environment, sequential, config.leader.advantage.build(),
+            (role_runtime(sequential.leader), role_runtime(sequential.coordinator),
+             role_runtime(sequential.followers)), device=device, config_data=snapshot, seed=seed,
+            leader_trajectories=config.response_trajectories,
+        )
+        return Experiment(config, sequential, sequential_trainer)
     if isinstance(config, MAPPOConfig):
         if isinstance(environment, EnvironmentSpec):
             raise TypeError("MAPPO 采集 rollout 需要 environment，不能只传 EnvironmentSpec")

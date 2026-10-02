@@ -31,6 +31,9 @@
 - [PreparedRollout._sequences.chunks_of](#preparedrollout-_sequences-chunks_of)
 - [PreparedRollout._sequences.initial](#preparedrollout-_sequences-initial)
 - [PreparedRollout.minibatches](#preparedrollout-minibatches)
+- [PreparedRollout.consume](#preparedrollout-consume)
+- [PreparedRollout.concatenate](#preparedrollout-concatenate)
+- [PreparedRollout.concatenate.cat](#preparedrollout-concatenate-cat)
 - [RolloutBuffer](#rolloutbuffer)
 - [RolloutBuffer.__init__](#rolloutbuffer-__init__)
 - [RolloutBuffer._record_state](#rolloutbuffer-_record_state)
@@ -493,11 +496,73 @@ Returns:
     MARLBatch 迭代器；首次推进即标记 consumed，禁止另开一次旧数据更新。
 ```
 
+<a id="preparedrollout-consume"></a>
+
+## PreparedRollout.consume
+
+[源码位置](../../marl/training/on_policy.py#L454) · [页内目录](#符号目录)
+
+```python
+def consume(self) -> MARLBatch
+```
+
+```text
+领取完整 fresh batch 的单次更新权，供全轨迹高阶目标使用。
+
+Inputs:
+    无显式参数；读取当前 rollout 的消费状态。
+
+Returns:
+    原始 MARLBatch；调用后 consumed=True，后续更新/迁移/领取会拒绝。
+```
+
+<a id="preparedrollout-concatenate"></a>
+
+## PreparedRollout.concatenate
+
+[源码位置](../../marl/training/on_policy.py#L469) · [页内目录](#符号目录)
+
+```python
+def concatenate(cls, rollouts: Sequence[PreparedRollout]) -> PreparedRollout
+```
+
+```text
+合并同一策略采集的 fresh rollout，成功后转交所有输入的消费权。
+
+Args:
+    rollouts: 非空且不重复的同构 rollout；循环路径时间长度必须相等。
+        调用方负责验证策略版本。GAE 已各自完成，不跨 episode 递推。
+
+Returns:
+    新 PreparedRollout；数据沿维 0 拼接，h/c 初态沿 B=1、历史沿 B=2。
+    验证失败不会消费输入，old log-prob/value 和采样状态保持不变。
+```
+
+<a id="preparedrollout-concatenate-cat"></a>
+
+## PreparedRollout.concatenate.cat
+
+[源码位置](../../marl/training/on_policy.py#L490) · [页内目录](#符号目录)
+
+```python
+def cat(values: Sequence[Tensor | None]) -> Tensor | None
+```
+
+```text
+同构可选数据张量沿第 0 维拼接。
+
+Args:
+    values: 同构 Tensor 或全部 None；混合缺失字段报错。
+
+Returns:
+    沿第 0 维拼接的 Tensor，或 None；不修改输入。
+```
+
 <a id="rolloutbuffer"></a>
 
 ## RolloutBuffer
 
-[源码位置](../../marl/training/on_policy.py#L455) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L525) · [页内目录](#符号目录)
 
 `class RolloutBuffer()`
 
@@ -507,7 +572,7 @@ Returns:
 
 ## RolloutBuffer.__init__
 
-[源码位置](../../marl/training/on_policy.py#L458) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L528) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, spec: EnvironmentSpec, *, horizon: int, num_envs: int, pin_memory: bool=False) -> None
@@ -530,7 +595,7 @@ Returns:
 
 ## RolloutBuffer._record_state
 
-[源码位置](../../marl/training/on_policy.py#L523) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L594) · [页内目录](#符号目录)
 
 ```python
 def _record_state(self, history: RecurrentState, state: RecurrentState) -> RecurrentState
@@ -551,7 +616,7 @@ Returns:
 
 ## RolloutBuffer._copy
 
-[源码位置](../../marl/training/on_policy.py#L557) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L628) · [页内目录](#符号目录)
 
 ```python
 def _copy(self, target: Tensor, value: Tensor, name: str) -> None
@@ -573,10 +638,10 @@ Returns:
 
 ## RolloutBuffer.add
 
-[源码位置](../../marl/training/on_policy.py#L573) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L644) · [页内目录](#符号目录)
 
 ```python
-def add(self, *, observations: Tensor, states: Tensor, actions: Tensor, rewards: Tensor, old_log_prob: Tensor, old_values: Tensor, terminated: Tensor, truncated: Tensor, action_masks: Tensor | None=None, policy_state: RecurrentState=None, value_state: RecurrentState=None) -> None
+def add(self, *, observations: Tensor, states: Tensor, actions: Tensor, rewards: Tensor, old_log_prob: Tensor, old_values: Tensor, terminated: Tensor, truncated: Tensor, action_masks: Tensor | None=None, raw_actions: Tensor | None=None, policy_state: RecurrentState=None, value_state: RecurrentState=None) -> None
 ```
 
 ```text
@@ -592,6 +657,7 @@ Args:
     terminated: bool [B,N]，真实 MDP 终止，禁止下一状态 bootstrap。
     truncated: bool [B,N]，时间截断；允许当前 bootstrap，但不跨 episode 递推 GAE。
     action_masks: 采样时的 bool [B,N,A]；离散动作必填，连续动作必须为 None。
+    raw_actions: 可选 pre-tanh 浮点 [B,N,A]，连续 PPO 需要从首步一致保存。
     policy_state: 处理当前观测之前的 actor 状态 [K,B,N,H]；LSTM 为 (h,c)，MLP 为 None。
     value_state: 处理当前观测之前的 critic 状态 [K,B,H]；LSTM 为 (h,c)，MLP 为 None。
 
@@ -603,7 +669,7 @@ Returns:
 
 ## RolloutBuffer.finish
 
-[源码位置](../../marl/training/on_policy.py#L627) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L710) · [页内目录](#符号目录)
 
 ```python
 def finish(self, next_value: Tensor, estimator: AdvantageEstimator) -> PreparedRollout
@@ -624,7 +690,7 @@ Returns:
 
 ## RolloutBuffer.finish.layout
 
-[源码位置](../../marl/training/on_policy.py#L654) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L737) · [页内目录](#符号目录)
 
 ```python
 def layout(tensor: Tensor) -> Tensor
@@ -644,7 +710,7 @@ Returns:
 
 ## PPOUpdateConfig
 
-[源码位置](../../marl/training/on_policy.py#L698) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L785) · [页内目录](#符号目录)
 
 `class PPOUpdateConfig()`
 
@@ -669,7 +735,7 @@ sequence_length: int | None = None
 
 ## PPOUpdateConfig.__post_init__
 
-[源码位置](../../marl/training/on_policy.py#L710) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L797) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -689,7 +755,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_actor_learning_rate
 
-[源码位置](../../marl/training/on_policy.py#L744) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L831) · [页内目录](#符号目录)
 
 ```python
 def resolved_actor_learning_rate(self) -> float
@@ -709,7 +775,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_critic_learning_rate
 
-[源码位置](../../marl/training/on_policy.py#L756) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L843) · [页内目录](#符号目录)
 
 ```python
 def resolved_critic_learning_rate(self) -> float
@@ -729,7 +795,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_actor_max_grad_norm
 
-[源码位置](../../marl/training/on_policy.py#L768) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L855) · [页内目录](#符号目录)
 
 ```python
 def resolved_actor_max_grad_norm(self) -> float | None
@@ -749,7 +815,7 @@ Returns:
 
 ## PPOUpdateConfig.resolved_critic_max_grad_norm
 
-[源码位置](../../marl/training/on_policy.py#L782) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L869) · [页内目录](#符号目录)
 
 ```python
 def resolved_critic_max_grad_norm(self) -> float | None
@@ -769,7 +835,7 @@ Returns:
 
 ## OnPolicyTrainer
 
-[源码位置](../../marl/training/on_policy.py#L798) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L885) · [页内目录](#符号目录)
 
 `class OnPolicyTrainer()`
 
@@ -779,7 +845,7 @@ Returns:
 
 ## OnPolicyTrainer.__init__
 
-[源码位置](../../marl/training/on_policy.py#L801) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L888) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, environment: SyncVectorEnv, algorithm: OnPolicyActorCritic, estimator: AdvantageEstimator, rollout_horizon: int, optimization: OptimizerRuntime, *, device: torch.device | str='cpu', config_data: Mapping[str, object] | None=None) -> None
@@ -805,7 +871,7 @@ Returns:
 
 ## OnPolicyTrainer._tensors
 
-[源码位置](../../marl/training/on_policy.py#L836) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L923) · [页内目录](#符号目录)
 
 ```python
 def _tensors(self, steps: Sequence[EnvironmentStep]) -> tuple[Tensor, Tensor, Tensor | None]
@@ -825,7 +891,7 @@ Returns:
 
 ## OnPolicyTrainer.collect
 
-[源码位置](../../marl/training/on_policy.py#L851) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L938) · [页内目录](#符号目录)
 
 ```python
 def collect(self, seeds: list[int]) -> PreparedRollout
@@ -845,7 +911,7 @@ Returns:
 
 ## OnPolicyTrainer.train_rollout
 
-[源码位置](../../marl/training/on_policy.py#L944) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1032) · [页内目录](#符号目录)
 
 ```python
 def train_rollout(self, seeds: list[int]) -> dict[str, float]
@@ -865,7 +931,7 @@ Returns:
 
 ## OnPolicyTrainer.state_dict
 
-[源码位置](../../marl/training/on_policy.py#L959) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1047) · [页内目录](#符号目录)
 
 ```python
 def state_dict(self) -> dict[str, Any]
@@ -885,7 +951,7 @@ Returns:
 
 ## OnPolicyTrainer.load_state_dict
 
-[源码位置](../../marl/training/on_policy.py#L975) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1063) · [页内目录](#符号目录)
 
 ```python
 def load_state_dict(self, state: Mapping[str, Any]) -> None
@@ -905,7 +971,7 @@ Returns:
 
 ## OnPolicyTrainer.save_checkpoint
 
-[源码位置](../../marl/training/on_policy.py#L1003) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1091) · [页内目录](#符号目录)
 
 ```python
 def save_checkpoint(self, path: str | Path) -> None
@@ -925,7 +991,7 @@ Returns:
 
 ## OnPolicyTrainer.load_checkpoint
 
-[源码位置](../../marl/training/on_policy.py#L1014) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1102) · [页内目录](#符号目录)
 
 ```python
 def load_checkpoint(self, path: str | Path, *, map_location: str | torch.device='cpu') -> None
@@ -946,7 +1012,7 @@ Returns:
 
 ## RolloutConfig
 
-[源码位置](../../marl/training/on_policy.py#L1030) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1118) · [页内目录](#符号目录)
 
 `class RolloutConfig()`
 
@@ -962,7 +1028,7 @@ horizon: int | None = None
 
 ## RolloutConfig.__post_init__
 
-[源码位置](../../marl/training/on_policy.py#L1033) · [页内目录](#符号目录)
+[源码位置](../../marl/training/on_policy.py#L1121) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None

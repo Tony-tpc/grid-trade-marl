@@ -18,13 +18,31 @@ seed、device、并行环境数和输出路径由脚本/命令行管理。
 
 | 算法 | 配置节 | 动作要求 |
 |---|---|---|
-| MAPPO | policy、critic、loss、advantage、rollout、update | discrete |
+| MAPPO | policy、critic、loss、advantage、rollout、update | discrete 或 continuous（independent_gaussian） |
+| SN-MAPPO（实验） | leader、coordinator、followers、implicit、response、kl_coefficient、response_trajectories、response_baseline | continuous，SequentialSpec |
 | MAAC | policy、critic、loss、value_target、replay、update、target_update | discrete |
 | MADDPG | policy、critic、loss、value_target、replay、update、target_update | continuous |
 | MASAC | policy、critic、loss、value_target、replay、update、target_update | continuous |
 | QMIX | policy、mixer、loss、value_target、replay、update、target_update | discrete，且 shared reward |
 
 `algorithm` 决定配置结构；不能只修改名称而保留另一算法的字段。
+
+[连续 MAPPO 小实验](algorithms/mappo_continuous.yaml) 复用同一个 MAPPO 类。
+[SN-MAPPO 完整默认值](algorithms/sn_mappo.yaml) 的三个角色各自使用完整 MAPPO 配置；
+省略角色使用 SN 默认值，显式提供角色时按该角色的 MAPPO 配置解析。
+默认 GRU 已通过三种子的真实日数据残差验收。DS 默认 `response_trajectories=8`，
+同一外部场景独立采样动作；`response_baseline=leave_one_out` 要求至少两条轨迹，
+`none` 仅作为无 baseline 消融。每周期采样步数为 `(response_trajectories+1)*horizon`。
+DS 直接项和响应项均使用折扣经济回报除以 `sum(gamma**t)`，另加 `kl_coefficient=0.01`
+的策略 KL；DS 的 role.loss 中 PPO clip/entropy 和 role.update.epochs 不参与 actor 更新。
+DN 继续使用 followers 的完整 PPO 配置。`implicit=false` 关闭响应项，保留同一 DS 目标。
+`response` 复用 SciPy GMRES：damping=0.001、residual_tolerance=0.0001、
+max_iterations=100、attempts=3、damping_multiplier=10、krylov_dimension=100。
+整数参数为正；damping 非负；残差阈值在 (0,1)，阻尼倍率大于 1。
+每次实际 Arnoldi 内迭代计入预算，restart 维度取 krylov_dimension 与剩余预算的较小值。
+成功以显式 `norm(Ax-b)/norm(b)` 判定；单独记录未加阻尼残差以暴露正则化影响。
+响应是当前点的局部正则化敏感度，不等价于原始 best response；失败 checkpoint
+仍不能当作完成了该周期的 UC actor 更新。配置变化会拒绝旧 checkpoint 精确续训。
 
 ## 网络：全部内置选项
 

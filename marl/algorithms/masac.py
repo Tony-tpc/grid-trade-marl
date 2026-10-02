@@ -115,6 +115,8 @@ class MASAC(BaseMARLAlgorithm):
         config.validate(spec)
         self.config = config
         self.policy = config.policy.build(spec)
+        if bool(getattr(self.policy, "is_recurrent", False)):
+            raise ValueError("离策略 policy 不支持跨环境步循环 backbone；请使用 history encoder")
         self.critics = config.critic.build(spec)
         self.target_critics = frozen_target(self.critics)
         self.td_loss = TDLossObjective(config.loss.td_coefficient)

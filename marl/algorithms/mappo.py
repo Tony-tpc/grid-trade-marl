@@ -14,7 +14,11 @@ from marl.core.recurrent import RecurrentState
 from marl.envs.base import ActionKind, EnvironmentSpec
 from marl.extensions import Buildable
 from marl.modules.critic import CentralizedValueConfig, RecurrentValueNetwork, ValueNetwork
-from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
+from marl.modules.policy import (
+    IndependentDiscreteConfig,
+    IndependentGaussianConfig,
+    StochasticPolicy,
+)
 from marl.objectives import (
     ClippedValueObjective,
     EntropyObjective,
@@ -55,7 +59,7 @@ class MAPPOConfig:
 
     schema_version: Literal[2] = 2
     algorithm: Literal["mappo"] = "mappo"
-    policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
+    policy: Buildable[StochasticPolicy] = IndependentDiscreteConfig()
     critic: Buildable[ValueNetwork] = CentralizedValueConfig()
     loss: MAPPOLossConfig = MAPPOLossConfig()
     advantage: GAEConfig = GAEConfig()
@@ -63,7 +67,7 @@ class MAPPOConfig:
     update: PPOUpdateConfig = PPOUpdateConfig()
 
     def validate(self, spec: EnvironmentSpec) -> None:
-        """验证配置版本和算法标识，并要求环境使用离散动作。
+        """验证配置版本及内置策略与环境动作类型的匹配。
 
         Args:
             spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
@@ -73,7 +77,13 @@ class MAPPOConfig:
         """
         if self.schema_version != 2 or self.algorithm != "mappo":
             raise ValueError("MAPPO config 的 algorithm/schema_version 不匹配")
-        if spec.action_kind != ActionKind.DISCRETE:
+        if (
+            isinstance(self.policy, IndependentDiscreteConfig)
+            and spec.action_kind != ActionKind.DISCRETE
+        ) or (
+            isinstance(self.policy, IndependentGaussianConfig)
+            and spec.action_kind != ActionKind.CONTINUOUS
+        ):
             raise ValueError("MAPPO 不支持当前动作类型")
 
     def build(self, spec: EnvironmentSpec) -> MAPPO:
@@ -284,6 +294,10 @@ class MAPPO(BaseMARLAlgorithm):
         if self.is_recurrent and batch.observations.ndim != 4:
             raise ValueError("循环 MAPPO 训练需要连续序列 [B,T,N,O]，不能随机打乱单步")
         expected_shape = batch.observations.shape[:-1]
+        if self.spec.action_kind == ActionKind.CONTINUOUS:
+            raw = batch.extras.get("raw_actions")
+            if raw is None or raw.shape != (*expected_shape, self.spec.action_dim):
+                raise ValueError("连续 MAPPO 必须保存 raw_actions [...,N,A]")
         for name in required:
             if batch.extras[name].shape != expected_shape:
                 raise ValueError(f"MAPPO {name} 必须具有逐智能体形状 {expected_shape}")
@@ -302,7 +316,13 @@ class MAPPO(BaseMARLAlgorithm):
 
         self._validate_training_batch(batch)
         assert batch.actions is not None
-        if self.recurrent_policy:
+        if self.spec.action_kind == ActionKind.CONTINUOUS:
+            output = self.policy.evaluate(
+                batch.observations, batch.actions, action_mask=batch.action_mask,
+                hidden_state=batch.policy_state,
+                raw_actions=batch.extras["raw_actions"],
+            )
+        elif self.recurrent_policy:
             output = self.policy.evaluate(
                 batch.observations,
                 batch.actions,

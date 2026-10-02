@@ -12,13 +12,14 @@
 
 - [Experiment](#experiment)
 - [build_experiment](#build_experiment)
+- [build_experiment.role_runtime](#build_experiment-role_runtime)
 - [_off_policy](#_off_policy)
 
 <a id="experiment"></a>
 
 ## Experiment
 
-[源码位置](../../marl/experiment.py#L31) · [页内目录](#符号目录)
+[源码位置](../../marl/experiment.py#L34) · [页内目录](#符号目录)
 
 `class Experiment(Generic[A, T])`
 
@@ -36,10 +37,10 @@ trainer: T
 
 ## build_experiment
 
-[源码位置](../../marl/experiment.py#L71) · [页内目录](#符号目录)
+[源码位置](../../marl/experiment.py#L85) · [页内目录](#符号目录)
 
 ```python
-def build_experiment(environment: Environment, config: AlgorithmConfig, *, device: str | torch.device='cpu', seed: int=42) -> Experiment[BaseMARLAlgorithm, OnPolicyTrainer] | Experiment[BaseMARLAlgorithm, OffPolicyTrainer]
+def build_experiment(environment: Environment, config: AlgorithmConfig, *, device: str | torch.device='cpu', seed: int=42) -> Experiment[BaseMARLAlgorithm, OnPolicyTrainer] | Experiment[BaseMARLAlgorithm, OffPolicyTrainer] | Experiment[SNMAPPO, SequentialTrainer]
 ```
 
 先绑定 spec、构造网络并移动设备，再创建 optimizer。
@@ -47,11 +48,23 @@ def build_experiment(environment: Environment, config: AlgorithmConfig, *, devic
 overload 仅用于静态类型推导，不是多套运行入口。内置类型的显式分支保留
 各 optimizer 的参数归属；不再抽象成 registry、工厂链或 UpdatePlan。
 
+<a id="build_experiment-role_runtime"></a>
+
+## build_experiment.role_runtime
+
+[源码位置](../../marl/experiment.py#L108) · [页内目录](#符号目录)
+
+```python
+def role_runtime(role: MAPPO) -> OptimizerRuntime
+```
+
+按角色 MAPPO 配置装配互不重叠的 actor/critic Adam、裁剪与 minibatch RNG。
+
 <a id="_off_policy"></a>
 
 ## _off_policy
 
-[源码位置](../../marl/experiment.py#L123) · [页内目录](#符号目录)
+[源码位置](../../marl/experiment.py#L162) · [页内目录](#符号目录)
 
 ```python
 def _off_policy(spec: EnvironmentSpec, config: OffConfig, device: str | torch.device, seed: int, snapshot: dict) -> Experiment[BaseMARLAlgorithm, OffPolicyTrainer]

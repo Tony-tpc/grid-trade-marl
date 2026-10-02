@@ -17,6 +17,7 @@ from marl.algorithms.maddpg import MADDPGConfig, MADDPGLossConfig
 from marl.algorithms.mappo import MAPPOConfig, MAPPOLossConfig
 from marl.algorithms.masac import MASACConfig, MASACLossConfig
 from marl.algorithms.qmix import QMIXConfig, QMIXLossConfig
+from marl.algorithms.sn_mappo import SNMAPPOConfig
 from marl.extensions import Buildable, Category, ExtensionCatalog, ExternalConfig
 from marl.models import (
     BackboneConfig,
@@ -48,9 +49,11 @@ from marl.modules.policy import (
     LocalQPolicy,
     PolicyTopology,
     SharedDiscreteQConfig,
+    StochasticPolicy,
 )
 from marl.returns import GAEConfig, TD0Config
 from marl.target_updates import HardTargetConfig, SoftTargetConfig
+from marl.training.implicit import ImplicitResponseConfig
 from marl.training.off_policy import (
     ActorCriticUpdateConfig,
     OffPolicyUpdateConfig,
@@ -59,7 +62,9 @@ from marl.training.off_policy import (
 )
 from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
 
-AlgorithmConfig: TypeAlias = MAPPOConfig | MAACConfig | MADDPGConfig | MASACConfig | QMIXConfig
+AlgorithmConfig: TypeAlias = (
+    MAPPOConfig | MAACConfig | MADDPGConfig | MASACConfig | QMIXConfig | SNMAPPOConfig
+)
 T = TypeVar("T")
 
 
@@ -148,7 +153,9 @@ def _component(
         if "backbone" in values:
             values["backbone"] = (
                 _backbone(values["backbone"], f"{category}.backbone")
-                if builtin in (IndependentDiscreteConfig, CentralizedValueConfig)
+                if builtin in (
+                    IndependentDiscreteConfig, IndependentGaussianConfig, CentralizedValueConfig
+                )
                 else _flat(MLPBackboneConfig, values["backbone"], f"{category}.backbone")
             )
         for field in ("embedding", "value_backbone"):
@@ -188,6 +195,25 @@ def algorithm_config_from_dict(
     if type(data.get("schema_version")) is not int or data["schema_version"] != 2:
         raise ValueError("schema_version 必须是整数 2；旧网络字段需迁移到 backbone 配置")
     name = data.get("algorithm")
+    if name == "sn_mappo":
+        if unknown := set(data) - set(get_type_hints(SNMAPPOConfig)):
+            raise ValueError(f"sn_mappo 含未知字段: {sorted(unknown)}")
+        defaults = SNMAPPOConfig()
+        roles = {}
+        for role in ("leader", "coordinator", "followers"):
+            if role not in data:
+                roles[role] = getattr(defaults, role)
+            else:
+                parsed = algorithm_config_from_dict({
+                    "schema_version": 2, "algorithm": "mappo", **_mapping(data[role], role)
+                }, catalog=catalog)
+                if not isinstance(parsed, MAPPOConfig):
+                    raise ValueError("顺序角色必须使用 MAPPO 配置")
+                roles[role] = parsed
+        values = dict(data)
+        values.update(roles)
+        values["response"] = _flat(ImplicitResponseConfig, data.get("response", {}), "response")
+        return _flat(SNMAPPOConfig, values, "sn_mappo")
     common = {"schema_version", "algorithm", "policy", "loss", "update"}
     if name == "mappo":
         allowed = common | {"critic", "advantage", "rollout"}
@@ -207,7 +233,13 @@ def algorithm_config_from_dict(
     loss = data.get("loss", {})
     if name == "mappo":
         return MAPPOConfig(
-            policy=_component(policy, IndependentDiscreteConfig, DiscretePolicy, "policy", catalog),
+            policy=_component(
+                policy,
+                IndependentGaussianConfig
+                if _mapping(policy, "policy").get("kind") == "independent_gaussian"
+                else IndependentDiscreteConfig,
+                StochasticPolicy, "policy", catalog,
+            ),
             critic=_component(critic, CentralizedValueConfig, ValueNetwork, "critic", catalog),
             loss=_flat(MAPPOLossConfig, loss, "loss"),
             advantage=_flat(GAEConfig, data.get("advantage", {}), "advantage"),
@@ -252,8 +284,15 @@ def algorithm_config_from_dict(
             **shared,
         )
     if name == "masac":
+        parsed_policy = _component(
+            policy, IndependentGaussianConfig, PolicyTopology, "policy", catalog
+        )
+        if isinstance(parsed_policy, IndependentGaussianConfig) and not isinstance(
+            parsed_policy.backbone, MLPBackboneConfig
+        ):
+            raise ValueError("离策略 policy 不支持跨环境步循环 backbone；请使用 history encoder")
         return MASACConfig(
-            policy=_component(policy, IndependentGaussianConfig, PolicyTopology, "policy", catalog),
+            policy=parsed_policy,
             critic=_component(critic, TwinQConfig, TwinQEnsemble, "critic", catalog),
             loss=_flat(MASACLossConfig, loss, "loss"),
             **shared,

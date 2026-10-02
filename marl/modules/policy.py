@@ -53,7 +53,8 @@ class PolicyTopology(Protocol):
 
 
 @runtime_checkable
-class DiscretePolicy(PolicyTopology, Protocol):
+class StochasticPolicy(PolicyTopology, Protocol):
+    """可采样且可评估固定动作的 PPO 策略；连续样本可携带 pre-tanh 值。"""
     def act(
         self,
         observations: Tensor,
@@ -63,8 +64,6 @@ class DiscretePolicy(PolicyTopology, Protocol):
         hidden_state: RecurrentState = None,
     ) -> MARLModelOutput: ...
 
-    def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor: ...
-
     def evaluate(
         self,
         observations: Tensor,
@@ -72,7 +71,13 @@ class DiscretePolicy(PolicyTopology, Protocol):
         *,
         action_mask: Tensor | None = None,
         hidden_state: RecurrentState = None,
+        raw_actions: Tensor | None = None,
     ) -> MARLModelOutput: ...
+
+
+@runtime_checkable
+class DiscretePolicy(StochasticPolicy, Protocol):
+    def logits(self, observations: Tensor, action_mask: Tensor | None = None) -> Tensor: ...
 
 
 @runtime_checkable
@@ -238,9 +243,12 @@ class IndependentDiscretePolicy(nn.Module):
         *,
         action_mask: Tensor | None = None,
         hidden_state: RecurrentState = None,
+        raw_actions: Tensor | None = None,
     ) -> MARLModelOutput:
         """评估给定联合动作；不会重新采样。"""
 
+        if raw_actions is not None:
+            raise ValueError("离散策略不接受 raw_actions")
         self._validate(observations, action_mask)
         if actions.shape != observations.shape[:-1]:
             raise ValueError("离散 actions 应为 [...,N]")
@@ -324,7 +332,7 @@ class IndependentGaussianPolicy(nn.Module):
         num_agents: int,
         observation_dim: int,
         action_dim: int,
-        backbone: MLPBackboneConfig = _DEFAULT_BACKBONE,
+        backbone: BackboneConfig = _DEFAULT_BACKBONE,
         encoder: EncoderConfig = _DEFAULT_ENCODER,
         history: HistoryLayout | None = None,
     ) -> None:
@@ -332,8 +340,8 @@ class IndependentGaussianPolicy(nn.Module):
         self.num_agents = num_agents
         self.observation_dim = observation_dim
         self.action_dim = action_dim
-        if not isinstance(backbone, MLPBackboneConfig):
-            raise ValueError("离策略 policy 不支持跨环境步循环 backbone；请使用 history encoder")
+        if not isinstance(backbone, (MLPBackboneConfig, GRUBackboneConfig, LSTMBackboneConfig)):
+            raise ValueError("连续 actor backbone 只支持 MLP/GRU/LSTM")
         self.actors = nn.ModuleList()
         for _ in range(num_agents):
             inputs = encoder.build(observation_dim, history)
@@ -341,6 +349,43 @@ class IndependentGaussianPolicy(nn.Module):
             self.actors.append(
                 Actor(network, GaussianActionHead(network.output_dim, action_dim), inputs)
             )
+        self.is_recurrent = network.is_recurrent
+
+    def initial_state(self, batch_size: int) -> RecurrentState:
+        """返回各独立 actor 初态 [K,B,N,H]；MLP 返回 None。"""
+        states = []
+        for actor in self.actors:
+            assert isinstance(actor, Actor)
+            states.append(actor.backbone.initial_state(batch_size))
+        return stack_states(states, dim=2)
+
+    def _agent_state(self, state: RecurrentState, index: int, batch: int) -> RecurrentState:
+        """从 [K,B,N,H] 的 h/c 中选择目标 actor，返回连续的 [K,B,H]。"""
+        def select(value: Tensor) -> Tensor:
+            """验证状态的层/批/智能体维并提取 index，MLP 的 None 由 map_state 保留。"""
+            if value.ndim != 4 or value.shape[1:3] != (batch, self.num_agents):
+                raise ValueError("policy_state 必须为 [K,B,N,H]")
+            return value[:, :, index, :].contiguous()
+        return map_state(state, select)
+
+    def _validate(self, observations: Tensor, action_mask: Tensor | None) -> None:
+        if action_mask is not None:
+            raise ValueError("连续策略不使用 action_mask")
+        if observations.shape[-2:] != (self.num_agents, self.observation_dim):
+            raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
+        if self.is_recurrent and observations.ndim not in (3, 4):
+            raise ValueError("循环 policy 输入必须为 [B,N,O] 或 [B,T,N,O]")
+
+    @staticmethod
+    def _combine(outputs: list[ActionHeadOutput]) -> MARLModelOutput:
+        """将 N 个连续 actor 输出堆叠为 [...,N,A]，保留 raw_actions 与独立 h/c 状态。"""
+        return MARLModelOutput(
+            actions=torch.stack([output.actions for output in outputs], dim=-2),
+            log_prob=_stack_scalar([output.log_prob for output in outputs]),
+            entropy=_stack_scalar([output.entropy for output in outputs]),
+            policy_state=stack_states([output.hidden_state for output in outputs], dim=2),
+            extras={"raw_actions": _stack_parameter(outputs, "raw_actions")},
+        )
 
     def act(
         self,
@@ -348,20 +393,41 @@ class IndependentGaussianPolicy(nn.Module):
         *,
         deterministic: bool = False,
         action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
     ) -> MARLModelOutput:
-        if action_mask is not None:
-            raise ValueError("连续策略不使用 action_mask")
-        if observations.shape[-2:] != (self.num_agents, self.observation_dim):
-            raise ValueError("observations 末两维与策略 EnvironmentSpec 不一致")
+        self._validate(observations, action_mask)
         outputs = [
-            actor(observations[..., index, :], deterministic=deterministic)
+            actor(
+                observations[..., index, :], deterministic=deterministic,
+                hidden_state=self._agent_state(hidden_state, index, observations.shape[0]),
+            )
             for index, actor in enumerate(self.actors)
         ]
-        return MARLModelOutput(
-            actions=torch.stack([output.actions for output in outputs], dim=-2),
-            log_prob=_stack_scalar([output.log_prob for output in outputs]),
-            entropy=_stack_scalar([output.entropy for output in outputs]),
-        )
+        return self._combine(outputs)
+
+    def evaluate(
+        self,
+        observations: Tensor,
+        actions: Tensor,
+        *,
+        action_mask: Tensor | None = None,
+        hidden_state: RecurrentState = None,
+        raw_actions: Tensor | None = None,
+    ) -> MARLModelOutput:
+        """评估 [...,N,A] 固定样本；逐 agent 概率/熵为 [...,N]。"""
+        self._validate(observations, action_mask)
+        expected = (*observations.shape[:-1], self.action_dim)
+        if actions.shape != expected or (raw_actions is not None and raw_actions.shape != expected):
+            raise ValueError("连续 actions/raw_actions 应为 [...,N,A]")
+        outputs = []
+        for index, actor in enumerate(self.actors):
+            assert isinstance(actor, Actor)
+            outputs.append(actor.evaluate_actions(
+                observations[..., index, :], actions[..., index, :],
+                hidden_state=self._agent_state(hidden_state, index, observations.shape[0]),
+                raw_actions=raw_actions[..., index, :] if raw_actions is not None else None,
+            ))
+        return self._combine(outputs)
 
 
 class SharedDiscreteQPolicy(nn.Module):
@@ -443,7 +509,7 @@ class IndependentDeterministicConfig:
 @dataclass(frozen=True, slots=True)
 class IndependentGaussianConfig:
     kind: Literal["independent_gaussian"] = "independent_gaussian"
-    backbone: MLPBackboneConfig = MLPBackboneConfig()
+    backbone: BackboneConfig = MLPBackboneConfig()
     encoder: EncoderConfig = IdentityEncoderConfig()
 
     def build(self, spec: EnvironmentSpec) -> IndependentGaussianPolicy:

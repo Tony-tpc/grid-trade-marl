@@ -20,7 +20,7 @@ from marl.envs import (
 from marl.experiment import build_experiment
 from marl.models import MLPBackboneConfig
 from marl.modules.critic import CentralizedValueConfig
-from marl.modules.policy import IndependentDiscreteConfig
+from marl.modules.policy import DiscretePolicy, IndependentDiscreteConfig
 from marl.runtime import SyncVectorEnv
 from marl.training.on_policy import PPOUpdateConfig, RolloutConfig
 
@@ -75,6 +75,8 @@ def test_config_construction_is_reproducible_with_fixed_seed() -> None:
     second = MAPPO(environment_spec(), config)
     batch = sample_batch()
 
+    assert isinstance(first.policy, DiscretePolicy)
+    assert isinstance(second.policy, DiscretePolicy)
     assert torch.allclose(
         first.policy.logits(batch.observations, batch.action_mask),
         second.policy.logits(batch.observations, batch.action_mask),

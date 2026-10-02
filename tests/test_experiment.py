@@ -53,7 +53,7 @@ def test_config_roundtrip_and_experiment(config, tmp_path):
     {"schema_version": True}, {"schema_version": 1.1}, {"schema_version": 1},
     {"algorithm": "unknown"}, {"critic": {"hidden_dim": True}},
     {"critic": {"hidden_dim": -1}}, {"policy": {"observation_dim": 10}},
-    {"policy": {"kind": "independent_gaussian"}},
+    {"policy": {"kind": "unknown_gaussian"}},
     {"update": {"learning_rate": float("nan")}}, {"group": [1, 2]},
     {"target_update": {"kind": "none"}},
 ])

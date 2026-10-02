@@ -13,7 +13,7 @@ import torch
 from torch import Tensor
 
 from marl.core import MARLBatch, MARLModelOutput
-from marl.core.recurrent import RecurrentState, map_state
+from marl.core.recurrent import RecurrentState, cat_states, map_state
 from marl.envs.base import ActionKind, EnvironmentSpec, EnvironmentStep
 from marl.returns import AdvantageEstimator
 from marl.runtime import SyncVectorEnv, environment_steps_to_tensors
@@ -451,6 +451,76 @@ class PreparedRollout:
                 )
                 yield _index_batch(batch, permutation[start : start + chunk_batch_size], valid)
 
+    def consume(self) -> MARLBatch:
+        """领取完整 fresh batch 的单次更新权，供全轨迹高阶目标使用。
+
+        Inputs:
+            无显式参数；读取当前 rollout 的消费状态。
+
+        Returns:
+            原始 MARLBatch；调用后 consumed=True，后续更新/迁移/领取会拒绝。
+        """
+        if self._consumed:
+            raise RuntimeError("on-policy rollout 已消费，不能重复用于参数更新")
+        self._consumed = True
+        return self.batch
+
+    @classmethod
+    def concatenate(cls, rollouts: Sequence[PreparedRollout]) -> PreparedRollout:
+        """合并同一策略采集的 fresh rollout，成功后转交所有输入的消费权。
+
+        Args:
+            rollouts: 非空且不重复的同构 rollout；循环路径时间长度必须相等。
+                调用方负责验证策略版本。GAE 已各自完成，不跨 episode 递推。
+
+        Returns:
+            新 PreparedRollout；数据沿维 0 拼接，h/c 初态沿 B=1、历史沿 B=2。
+            验证失败不会消费输入，old log-prob/value 和采样状态保持不变。
+        """
+        if not rollouts or len({id(r) for r in rollouts}) != len(rollouts):
+            raise ValueError("需要非空且不重复的 rollout")
+        if any(r.consumed for r in rollouts):
+            raise RuntimeError("不能合并已消费 rollout")
+        first = rollouts[0]
+        if any(r.batch.observations.shape[1:] != first.batch.observations.shape[1:]
+               or r.batch.extras.keys() != first.batch.extras.keys() for r in rollouts):
+            raise ValueError("合并 rollout 的时间/智能体/特征及 extras 必须一致")
+        batches = [r.batch for r in rollouts]
+
+        def cat(values: Sequence[Tensor | None]) -> Tensor | None:
+            """同构可选数据张量沿第 0 维拼接。
+
+            Args:
+                values: 同构 Tensor 或全部 None；混合缺失字段报错。
+
+            Returns:
+                沿第 0 维拼接的 Tensor，或 None；不修改输入。
+            """
+            if all(v is None for v in values):
+                return None
+            if any(v is None for v in values):
+                raise ValueError("合并 rollout 的可选字段必须一致")
+            return torch.cat([v for v in values if v is not None], 0)
+
+        batch = MARLBatch(
+            observations=torch.cat([b.observations for b in batches], 0),
+            actions=cat([b.actions for b in batches]), rewards=cat([b.rewards for b in batches]),
+            next_observations=cat([b.next_observations for b in batches]),
+            terminated=cat([b.terminated for b in batches]),
+            truncated=cat([b.truncated for b in batches]), state=cat([b.state for b in batches]),
+            next_state=cat([b.next_state for b in batches]),
+            action_mask=cat([b.action_mask for b in batches]),
+            next_action_mask=cat([b.next_action_mask for b in batches]),
+            extras={k: torch.cat([b.extras[k] for b in batches], 0) for k in first.batch.extras},
+            policy_state=cat_states([b.policy_state for b in batches], 1),
+            value_state=cat_states([b.value_state for b in batches], 1),
+        )
+        result = cls(batch, policy_history=cat_states([r.policy_history for r in rollouts], 2),
+                     value_history=cat_states([r.value_history for r in rollouts], 2))
+        for rollout in rollouts:
+            rollout.consume()
+        return result
+
 
 class RolloutBuffer:
     """预分配的固定长度 on-policy rollout；每个实例只能 finish 一次。"""
@@ -498,6 +568,7 @@ class RolloutBuffer:
             dtype=action_dtype,
             pin_memory=pin_memory,
         )
+        self.raw_actions: Tensor | None = None
         self.rewards = _allocate(horizon, num_envs, n, dtype=torch.float32, pin_memory=pin_memory)
         self.old_log_prob = _allocate(
             horizon, num_envs, n, dtype=torch.float32, pin_memory=pin_memory
@@ -582,6 +653,7 @@ class RolloutBuffer:
         terminated: Tensor,
         truncated: Tensor,
         action_masks: Tensor | None = None,
+        raw_actions: Tensor | None = None,
         policy_state: RecurrentState = None,
         value_state: RecurrentState = None,
     ) -> None:
@@ -597,6 +669,7 @@ class RolloutBuffer:
             terminated: bool [B,N]，真实 MDP 终止，禁止下一状态 bootstrap。
             truncated: bool [B,N]，时间截断；允许当前 bootstrap，但不跨 episode 递推 GAE。
             action_masks: 采样时的 bool [B,N,A]；离散动作必填，连续动作必须为 None。
+            raw_actions: 可选 pre-tanh 浮点 [B,N,A]，连续 PPO 需要从首步一致保存。
             policy_state: 处理当前观测之前的 actor 状态 [K,B,N,H]；LSTM 为 (h,c)，MLP 为 None。
             value_state: 处理当前观测之前的 critic 状态 [K,B,H]；LSTM 为 (h,c)，MLP 为 None。
 
@@ -605,6 +678,16 @@ class RolloutBuffer:
         """
         if self._finished or self.position >= self.horizon:
             raise RuntimeError("rollout 已满或已经 finish")
+        if raw_actions is not None:
+            if self.spec.action_kind != ActionKind.CONTINUOUS:
+                raise ValueError("raw_actions 仅适用于连续动作")
+            if self.raw_actions is None:
+                if self.position != 0:
+                    raise ValueError("raw_actions 必须从第一步开始保存")
+                self.raw_actions = torch.empty_like(self.actions)
+            self._copy(self.raw_actions, raw_actions, "raw_actions")
+        elif self.raw_actions is not None:
+            raise ValueError("raw_actions 不能在 rollout 中途消失")
         self._copy(self.observations, observations, "observations")
         self._copy(self.states, states, "states")
         self._copy(self.actions, actions, "actions")
@@ -679,6 +762,10 @@ class RolloutBuffer:
                 "old_values": layout(self.old_values).clone(),
                 "advantages": layout(advantages),
                 "returns": layout(returns),
+                **(
+                    {"raw_actions": layout(self.raw_actions)}
+                    if self.raw_actions is not None else {}
+                ),
             },
             policy_state=map_state(self.policy_history, lambda t: t[0]),
             value_state=map_state(self.value_history, lambda t: t[0]),
@@ -915,6 +1002,7 @@ class OnPolicyTrainer:
                 terminated=terminated,
                 truncated=truncated,
                 action_masks=cpu_masks,
+                raw_actions=output.extras.get("raw_actions"),
                 # 第一步 None 等价于零初态，模板尺寸从此次输出获得，保存的是输入状态。
                 policy_state=(
                     policy_state

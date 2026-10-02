@@ -25,6 +25,7 @@
 - [GaussianActionHead](#gaussianactionhead)
 - [GaussianActionHead.__init__](#gaussianactionhead-__init__)
 - [GaussianActionHead.forward](#gaussianactionhead-forward)
+- [GaussianActionHead.evaluate_actions](#gaussianactionhead-evaluate_actions)
 
 <a id="actionheadoutput"></a>
 
@@ -78,7 +79,7 @@ def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tens
 [源码位置](../../marl/modules/action_head.py#L35) · [页内目录](#符号目录)
 
 ```python
-def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tensor | None=None) -> ActionHeadOutput
+def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tensor | None=None, *, raw_actions: Tensor | None=None) -> ActionHeadOutput
 ```
 
 评估给定动作；不支持该能力的动作头应显式报错。
@@ -87,7 +88,7 @@ def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tenso
 
 ## DiscreteActionHead
 
-[源码位置](../../marl/modules/action_head.py#L48) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L50) · [页内目录](#符号目录)
 
 `class DiscreteActionHead(BaseActionHead)`
 
@@ -97,7 +98,7 @@ def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tenso
 
 ## DiscreteActionHead.__init__
 
-[源码位置](../../marl/modules/action_head.py#L51) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L53) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, feature_dim: int, action_dim: int) -> None
@@ -109,7 +110,7 @@ def __init__(self, feature_dim: int, action_dim: int) -> None
 
 ## DiscreteActionHead.logits
 
-[源码位置](../../marl/modules/action_head.py#L55) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L57) · [页内目录](#符号目录)
 
 ```python
 def logits(self, features: Tensor, action_mask: Tensor | None=None) -> Tensor
@@ -123,7 +124,7 @@ def logits(self, features: Tensor, action_mask: Tensor | None=None) -> Tensor
 
 ## DiscreteActionHead.forward
 
-[源码位置](../../marl/modules/action_head.py#L67) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L69) · [页内目录](#符号目录)
 
 ```python
 def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tensor | None=None) -> ActionHeadOutput
@@ -135,10 +136,10 @@ def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tens
 
 ## DiscreteActionHead.evaluate_actions
 
-[源码位置](../../marl/modules/action_head.py#L77) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L79) · [页内目录](#符号目录)
 
 ```python
-def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tensor | None=None) -> ActionHeadOutput
+def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tensor | None=None, *, raw_actions: Tensor | None=None) -> ActionHeadOutput
 ```
 
 返回给定离散动作的 log-prob 和 entropy，不重新采样。
@@ -147,7 +148,7 @@ def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tenso
 
 ## DeterministicActionHead
 
-[源码位置](../../marl/modules/action_head.py#L98) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L104) · [页内目录](#符号目录)
 
 `class DeterministicActionHead(BaseActionHead)`
 
@@ -160,7 +161,7 @@ def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tenso
 
 ## DeterministicActionHead.__init__
 
-[源码位置](../../marl/modules/action_head.py#L105) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L111) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, feature_dim: int, action_dim: int) -> None
@@ -172,7 +173,7 @@ def __init__(self, feature_dim: int, action_dim: int) -> None
 
 ## DeterministicActionHead.forward
 
-[源码位置](../../marl/modules/action_head.py#L109) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L115) · [页内目录](#符号目录)
 
 ```python
 def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tensor | None=None) -> ActionHeadOutput
@@ -184,20 +185,20 @@ def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tens
 
 ## GaussianActionHead
 
-[源码位置](../../marl/modules/action_head.py#L122) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L128) · [页内目录](#符号目录)
 
 `class GaussianActionHead(BaseActionHead)`
 
 对角高斯重参数化采样，再经 tanh 限制到 [-1,1]。
 
 mean 依赖观测，log_std 是每个动作维共享于所有观测的可学习参数；不是
-state-dependent std。当前只实现采样路径，不宣称支持连续 PPO 的固定动作评估。
+state-dependent std。采样保留 pre-tanh raw_actions，固定样本评估避免饱和逆变换。
 
 <a id="gaussianactionhead-__init__"></a>
 
 ## GaussianActionHead.__init__
 
-[源码位置](../../marl/modules/action_head.py#L129) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L135) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, feature_dim: int, action_dim: int, min_log_std: float=-20.0, max_log_std: float=2.0) -> None
@@ -209,10 +210,25 @@ def __init__(self, feature_dim: int, action_dim: int, min_log_std: float=-20.0, 
 
 ## GaussianActionHead.forward
 
-[源码位置](../../marl/modules/action_head.py#L141) · [页内目录](#符号目录)
+[源码位置](../../marl/modules/action_head.py#L147) · [页内目录](#符号目录)
 
 ```python
 def forward(self, features: Tensor, deterministic: bool=False, action_mask: Tensor | None=None) -> ActionHeadOutput
 ```
 
 输入 features 与 deterministic，返回 tanh-Gaussian 动作、修正 log-prob 和熵估计。
+
+<a id="gaussianactionhead-evaluate_actions"></a>
+
+## GaussianActionHead.evaluate_actions
+
+[源码位置](../../marl/modules/action_head.py#L169) · [页内目录](#符号目录)
+
+```python
+def evaluate_actions(self, features: Tensor, actions: Tensor, action_mask: Tensor | None=None, *, raw_actions: Tensor | None=None) -> ActionHeadOutput
+```
+
+评估固定 [...,A] 样本；PPO 必须传采样时保存的 pre-tanh 值。
+
+返回的 entropy 使用当前策略新样本的重参数化 MC 估计，不能把旧动作的
+surprisal 当作当前策略熵。无 raw_actions 的调用只接受严格位于 (-1,1) 的动作。

@@ -74,12 +74,15 @@ class Actor(nn.Module):
         *,
         action_mask: Tensor | None = None,
         hidden_state: RecurrentState = None,
+        raw_actions: Tensor | None = None,
         **backbone_kwargs: Tensor,
     ) -> ActionHeadOutput:
         """在同一 Actor 中评估给定动作，供 PPO 等 on-policy 目标使用。"""
 
         encoded = self._encode(observations, hidden_state, **backbone_kwargs)
-        result = self.action_head.evaluate_actions(encoded.features, actions, action_mask)
+        result = self.action_head.evaluate_actions(
+            encoded.features, actions, action_mask, raw_actions=raw_actions
+        )
         return self._attach_hidden_state(result, encoded.hidden_state)
 
     def discrete_logits(

@@ -37,6 +37,8 @@ class BaseActionHead(nn.Module, ABC):
         features: Tensor,
         actions: Tensor,
         action_mask: Tensor | None = None,
+        *,
+        raw_actions: Tensor | None = None,
     ) -> ActionHeadOutput:
         """评估给定动作；不支持该能力的动作头应显式报错。"""
 
@@ -79,9 +81,13 @@ class DiscreteActionHead(BaseActionHead):
         features: Tensor,
         actions: Tensor,
         action_mask: Tensor | None = None,
+        *,
+        raw_actions: Tensor | None = None,
     ) -> ActionHeadOutput:
         """返回给定离散动作的 log-prob 和 entropy，不重新采样。"""
 
+        if raw_actions is not None:
+            raise ValueError("离散动作不接受 raw_actions")
         logits = self.logits(features, action_mask)
         if actions.shape != logits.shape[:-1]:
             raise ValueError("离散 actions 形状必须等于 logits 去掉动作维后的形状")
@@ -123,7 +129,7 @@ class GaussianActionHead(BaseActionHead):
     """对角高斯重参数化采样，再经 tanh 限制到 [-1,1]。
 
     mean 依赖观测，log_std 是每个动作维共享于所有观测的可学习参数；不是
-    state-dependent std。当前只实现采样路径，不宣称支持连续 PPO 的固定动作评估。
+    state-dependent std。采样保留 pre-tanh raw_actions，固定样本评估避免饱和逆变换。
     """
 
     def __init__(
@@ -156,5 +162,48 @@ class GaussianActionHead(BaseActionHead):
         # deterministic=True 时它只是该动作的 surprisal，不应当解释为熵。
         return ActionHeadOutput(actions, log_prob, -log_prob, {
             "mean": mean, "log_std": log_std,
+            "raw_actions": raw_action,
             "gaussian_entropy": distribution.entropy().sum(dim=-1),
+        })
+
+    def evaluate_actions(
+        self,
+        features: Tensor,
+        actions: Tensor,
+        action_mask: Tensor | None = None,
+        *,
+        raw_actions: Tensor | None = None,
+    ) -> ActionHeadOutput:
+        """评估固定 [...,A] 样本；PPO 必须传采样时保存的 pre-tanh 值。
+
+        返回的 entropy 使用当前策略新样本的重参数化 MC 估计，不能把旧动作的
+        surprisal 当作当前策略熵。无 raw_actions 的调用只接受严格位于 (-1,1) 的动作。
+        """
+        if action_mask is not None:
+            raise ValueError("连续动作头不使用 action_mask")
+        mean = self.mean_layer(features)
+        if actions.shape != mean.shape or not torch.isfinite(actions).all():
+            raise ValueError("连续 actions 必须是有限的 [...,A]，与 mean 同形")
+        if raw_actions is None:
+            if (actions.abs() >= 1).any():
+                raise ValueError("饱和动作必须提供采样时的 raw_actions")
+            raw_actions = torch.atanh(actions)
+        if raw_actions.shape != mean.shape or not torch.isfinite(raw_actions).all():
+            raise ValueError("raw_actions 必须有限且与 actions 同形")
+        if raw_actions.dtype != actions.dtype or raw_actions.device != actions.device:
+            raise ValueError("raw_actions 的 dtype/device 与 actions 不一致")
+        if not torch.allclose(raw_actions.tanh(), actions, rtol=1e-5, atol=1e-6):
+            raise ValueError("raw_actions 与执行的 tanh actions 不一致")
+        log_std = self.log_std.clamp(self.min_log_std, self.max_log_std).expand_as(mean)
+        distribution = Normal(mean, log_std.exp(), validate_args=False)
+        correction = TanhTransform().log_abs_det_jacobian(raw_actions, actions)
+        log_prob = (distribution.log_prob(raw_actions) - correction).sum(-1)
+        entropy_sample = distribution.rsample()
+        entropy = (
+            -distribution.log_prob(entropy_sample)
+            + TanhTransform().log_abs_det_jacobian(entropy_sample, entropy_sample.tanh())
+        ).sum(-1)
+        return ActionHeadOutput(actions, log_prob, entropy, {
+            "mean": mean, "log_std": log_std, "raw_actions": raw_actions,
+            "gaussian_entropy": distribution.entropy().sum(-1),
         })

@@ -1,0 +1,12 @@
+# 连续 MAPPO 小规模诊断；全部尺寸来自 adapter.spec。
+schema_version: 2
+algorithm: mappo
+policy:
+  kind: independent_gaussian
+  backbone: {kind: mlp, hidden_dims: [32], output_dim: 32}
+critic:
+  kind: centralized_value
+  backbone: {kind: mlp, hidden_dims: [32], output_dim: 32}
+loss: {clip_ratio: 0.15, entropy_coefficient: 0.001}
+advantage: {kind: gae, gamma: 0.99, lambda: 0.95, normalization_scope: per_agent}
+update: {learning_rate: 0.0003, epochs: 4, mini_batch_size: 96, max_grad_norm: 1.0}

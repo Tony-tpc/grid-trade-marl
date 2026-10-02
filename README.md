@@ -7,6 +7,27 @@
 配置与算法实现放在一起，组件配置与组件实现放在一起。通常从要修改的算法文件开始，
 查看文件顶部的 Config 和算法构造函数，就能找到网络、loss 和训练参数的落点。
 
+## SN-MAPPO 小规模复现工作区
+
+[审计、修订决定、任务计划与实际验收](docs/sn_mappo_reproduction.md)。
+新增公开 OPSD 数据准备、UC/Consumer 物理环境、连续 MAPPO 和双阶段实验入口。
+连续 MAPPO 复用原 PPO/GAE/循环片段与 checkpoint；SN-MAPPO 另组合角色和 DiCE/GMRES。
+DS 使用 8 条独立动作轨迹、leave-one-out baseline 和一致的上下层经济目标。
+**默认配置已通过三种子的真实日数据残差验收；这是局部正则化响应，仍非论文完整复现。**
+优先级采样、大规模消融和均衡偏离搜索仍在后续验收计划中。
+
+```powershell
+python -m pip install -e ".[dev,reproduction]"
+python -m examples.prepare_demand_response
+python -m examples.train_demand_response --consumers 3 --steps 20000
+python -m examples.train_sn_mappo --first-order --steps 20000
+python -m examples.train_sn_mappo  # 默认每个 seed 一周期；二阶残差失败即停止
+python -m examples.plot_demand_response
+```
+
+训练产物在忽略目录 `runs/sn_mappo/`。在 worktree 中可直接使用主仓库的已验证解释器，
+例如 `D:/Yang/BaseModel/MARL/.venv/Scripts/python.exe`，不要求复制或重建虚拟环境。
+
 ```text
 算法 YAML → load_algorithm_config() → typed config
                                    ↓

@@ -10,15 +10,38 @@
 
 ## 符号目录
 
+- [cat_states](#cat_states)
 - [map_state](#map_state)
 - [stack_states](#stack_states)
 - [validate_state](#validate_state)
+
+<a id="cat_states"></a>
+
+## cat_states
+
+[源码位置](../../marl/core/recurrent.py#L12) · [页内目录](#符号目录)
+
+```python
+def cat_states(states: Sequence[RecurrentState], dim: int) -> RecurrentState
+```
+
+```text
+沿 batch 维拼接同类 GRU/LSTM 状态；None 不得与非空状态混合。
+
+Args:
+    states: 同构 GRU Tensor、LSTM (h,c) 或全 None；初态 [K,B,(N),H]，
+        历史 [T,K,B,(N),H]，非拼接维必须相等。
+    dim: 拼接维；初态的 B 为 1，历史的 B 为 2。
+
+Returns:
+    拼接后的同类状态，不修改输入。
+```
 
 <a id="map_state"></a>
 
 ## map_state
 
-[源码位置](../../marl/core/recurrent.py#L12) · [页内目录](#符号目录)
+[源码位置](../../marl/core/recurrent.py#L40) · [页内目录](#符号目录)
 
 ```python
 def map_state(state: RecurrentState, function: Callable[[Tensor], Tensor]) -> RecurrentState
@@ -30,7 +53,7 @@ def map_state(state: RecurrentState, function: Callable[[Tensor], Tensor]) -> Re
 
 ## stack_states
 
-[源码位置](../../marl/core/recurrent.py#L23) · [页内目录](#符号目录)
+[源码位置](../../marl/core/recurrent.py#L51) · [页内目录](#符号目录)
 
 ```python
 def stack_states(states: Sequence[RecurrentState], dim: int) -> RecurrentState
@@ -42,7 +65,7 @@ def stack_states(states: Sequence[RecurrentState], dim: int) -> RecurrentState
 
 ## validate_state
 
-[源码位置](../../marl/core/recurrent.py#L42) · [页内目录](#符号目录)
+[源码位置](../../marl/core/recurrent.py#L70) · [页内目录](#符号目录)
 
 ```python
 def validate_state(state: RecurrentState, shape: tuple[int, ...], reference: Tensor, *, lstm: bool) -> None

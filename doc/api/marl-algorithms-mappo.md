@@ -31,7 +31,7 @@
 
 ## MAPPOLossConfig
 
-[源码位置](../../marl/algorithms/mappo.py#L32) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L36) · [页内目录](#符号目录)
 
 `class MAPPOLossConfig()`
 
@@ -50,7 +50,7 @@ normalize_targets: bool = False
 
 ## MAPPOLossConfig.__post_init__
 
-[源码位置](../../marl/algorithms/mappo.py#L38) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L42) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -70,7 +70,7 @@ Returns:
 
 ## MAPPOConfig
 
-[源码位置](../../marl/algorithms/mappo.py#L53) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L57) · [页内目录](#符号目录)
 
 `class MAPPOConfig()`
 
@@ -81,7 +81,7 @@ MAPPO 配置；环境尺寸由 spec 注入。
 ```python
 schema_version: Literal[2] = 2
 algorithm: Literal['mappo'] = 'mappo'
-policy: Buildable[DiscretePolicy] = IndependentDiscreteConfig()
+policy: Buildable[StochasticPolicy] = IndependentDiscreteConfig()
 critic: Buildable[ValueNetwork] = CentralizedValueConfig()
 loss: MAPPOLossConfig = MAPPOLossConfig()
 advantage: GAEConfig = GAEConfig()
@@ -93,14 +93,14 @@ update: PPOUpdateConfig = PPOUpdateConfig()
 
 ## MAPPOConfig.validate
 
-[源码位置](../../marl/algorithms/mappo.py#L65) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L69) · [页内目录](#符号目录)
 
 ```python
 def validate(self, spec: EnvironmentSpec) -> None
 ```
 
 ```text
-验证配置版本和算法标识，并要求环境使用离散动作。
+验证配置版本及内置策略与环境动作类型的匹配。
 
 Args:
     spec: 环境规格；N/O/A/S、动作类型、奖励语义和 horizon 均以它为准。
@@ -113,7 +113,7 @@ Returns:
 
 ## MAPPOConfig.build
 
-[源码位置](../../marl/algorithms/mappo.py#L79) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L89) · [页内目录](#符号目录)
 
 ```python
 def build(self, spec: EnvironmentSpec) -> MAPPO
@@ -133,7 +133,7 @@ Returns:
 
 ## MAPPO
 
-[源码位置](../../marl/algorithms/mappo.py#L91) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L101) · [页内目录](#符号目录)
 
 `class MAPPO(BaseMARLAlgorithm)`
 
@@ -146,7 +146,7 @@ trainer 只负责采集/GAE/checkpoint。act 只返回动作供环境执行，sa
 
 ## MAPPO.__init__
 
-[源码位置](../../marl/algorithms/mappo.py#L98) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L108) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, spec: EnvironmentSpec, config: MAPPOConfig) -> None
@@ -167,7 +167,7 @@ Returns:
 
 ## MAPPO._values_with_state
 
-[源码位置](../../marl/algorithms/mappo.py#L131) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L141) · [页内目录](#符号目录)
 
 ```python
 def _values_with_state(self, observations: Tensor, state: Tensor | None, value_state: RecurrentState) -> tuple[Tensor, RecurrentState]
@@ -189,7 +189,7 @@ Returns:
 
 ## MAPPO.values
 
-[源码位置](../../marl/algorithms/mappo.py#L155) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L165) · [页内目录](#符号目录)
 
 ```python
 def values(self, observations: Tensor, state: Tensor | None=None, *, value_state: RecurrentState=None) -> Tensor
@@ -213,7 +213,7 @@ Returns:
 
 ## MAPPO.sample
 
-[源码位置](../../marl/algorithms/mappo.py#L176) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L186) · [页内目录](#符号目录)
 
 ```python
 def sample(self, observations: Tensor, state: Tensor | None=None, *, deterministic: bool=False, action_mask: Tensor | None=None, policy_state: RecurrentState=None, value_state: RecurrentState=None) -> MARLModelOutput
@@ -238,7 +238,7 @@ Returns:
 
 ## MAPPO.act
 
-[源码位置](../../marl/algorithms/mappo.py#L221) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L231) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None, **kwargs: Tensor) -> Tensor
@@ -261,7 +261,7 @@ Returns:
 
 ## MAPPO.compute_loss_bundle
 
-[源码位置](../../marl/algorithms/mappo.py#L248) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L258) · [页内目录](#符号目录)
 
 ```python
 def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -281,7 +281,7 @@ Returns:
 
 ## MAPPO._validate_training_batch
 
-[源码位置](../../marl/algorithms/mappo.py#L263) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L273) · [页内目录](#符号目录)
 
 ```python
 def _validate_training_batch(self, batch: MARLBatch) -> None
@@ -303,7 +303,7 @@ Returns:
 
 ## MAPPO.compute_policy_loss_bundle
 
-[源码位置](../../marl/algorithms/mappo.py#L291) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L305) · [页内目录](#符号目录)
 
 ```python
 def compute_policy_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -325,7 +325,7 @@ Returns:
 
 ## MAPPO.compute_value_loss_bundle
 
-[源码位置](../../marl/algorithms/mappo.py#L338) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L358) · [页内目录](#符号目录)
 
 ```python
 def compute_value_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -347,7 +347,7 @@ Returns:
 
 ## MAPPO.update
 
-[源码位置](../../marl/algorithms/mappo.py#L378) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/mappo.py#L398) · [页内目录](#符号目录)
 
 ```python
 def update(self, experience: PreparedRollout, runtime: OptimizerRuntime) -> dict[str, float]

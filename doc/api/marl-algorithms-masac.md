@@ -169,7 +169,7 @@ Returns:
 
 ## MASAC.act
 
-[源码位置](../../marl/algorithms/masac.py#L128) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L130) · [页内目录](#符号目录)
 
 ```python
 def act(self, observations: Tensor, *, deterministic: bool=False, action_mask: Tensor | None=None, **kwargs: Tensor) -> Tensor
@@ -193,7 +193,7 @@ Returns:
 
 ## MASAC.compute_loss_bundle
 
-[源码位置](../../marl/algorithms/masac.py#L154) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L156) · [页内目录](#符号目录)
 
 ```python
 def compute_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -213,7 +213,7 @@ Returns:
 
 ## MASAC._validate_training_batch
 
-[源码位置](../../marl/algorithms/masac.py#L171) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L173) · [页内目录](#符号目录)
 
 ```python
 def _validate_training_batch(self, batch: MARLBatch) -> None
@@ -233,7 +233,7 @@ Returns:
 
 ## MASAC.compute_critic_loss_bundle
 
-[源码位置](../../marl/algorithms/masac.py#L184) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L186) · [页内目录](#符号目录)
 
 ```python
 def compute_critic_loss_bundle(self, batch: MARLBatch, *, update_statistics: bool=False) -> LossBundle
@@ -257,7 +257,7 @@ Returns:
 
 ## MASAC.compute_actor_loss_bundle
 
-[源码位置](../../marl/algorithms/masac.py#L235) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L237) · [页内目录](#符号目录)
 
 ```python
 def compute_actor_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -279,7 +279,7 @@ Returns:
 
 ## MASAC._actor_and_temperature_results
 
-[源码位置](../../marl/algorithms/masac.py#L250) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L252) · [页内目录](#符号目录)
 
 ```python
 def _actor_and_temperature_results(self, batch: MARLBatch) -> tuple[ObjectiveResult, ObjectiveResult]
@@ -299,7 +299,7 @@ Returns:
 
 ## MASAC.compute_temperature_loss_bundle
 
-[源码位置](../../marl/algorithms/masac.py#L288) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L290) · [页内目录](#符号目录)
 
 ```python
 def compute_temperature_loss_bundle(self, batch: MARLBatch) -> LossBundle
@@ -321,7 +321,7 @@ Returns:
 
 ## MASAC.update
 
-[源码位置](../../marl/algorithms/masac.py#L311) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L313) · [页内目录](#符号目录)
 
 ```python
 def update(self, batch: MARLBatch, runtime: OptimizerRuntime) -> dict[str, float]
@@ -345,7 +345,7 @@ Returns:
 
 ## MASAC.target_pairs
 
-[源码位置](../../marl/algorithms/masac.py#L368) · [页内目录](#符号目录)
+[源码位置](../../marl/algorithms/masac.py#L370) · [页内目录](#符号目录)
 
 ```python
 def target_pairs(self) -> tuple[tuple[nn.Module, nn.Module], ...]

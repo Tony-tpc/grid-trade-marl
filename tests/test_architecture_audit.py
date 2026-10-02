@@ -13,6 +13,7 @@ from torch import Tensor, nn
 
 from marl.algorithms import MAAC, MADDPG, MAPPO, MASAC, QMIX, MAPPOConfig, QMIXConfig
 from marl.algorithms.base import BaseMARLAlgorithm
+from marl.algorithms.sn_mappo import SNMAPPOConfig
 from marl.config import algorithm_config_from_dict, config_to_dict
 from marl.core import MARLBatch
 from marl.envs import ActionKind, EnvironmentSpec, RewardStructure
@@ -76,6 +77,7 @@ def test_single_algorithm_base_and_optimizer_lifecycle() -> None:
 ])
 def test_shared_update_config_preserves_yaml_fields(name: str, kind: type) -> None:
     config = algorithm_config_from_dict({"schema_version": 2, "algorithm": name})
+    assert not isinstance(config, SNMAPPOConfig)
     assert type(config.update) is kind
     data = config_to_dict(config)
     assert config_to_dict(algorithm_config_from_dict(data)) == data

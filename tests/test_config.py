@@ -3,12 +3,19 @@ from pathlib import Path
 
 import pytest
 
-from marl.algorithms import MAACConfig, MADDPGConfig, MAPPOConfig, MASACConfig, QMIXConfig
+from marl.algorithms import (
+    MAACConfig,
+    MADDPGConfig,
+    MAPPOConfig,
+    MASACConfig,
+    QMIXConfig,
+    SNMAPPOConfig,
+)
 from marl.config import load_algorithm_config
 
 
 @pytest.mark.parametrize("config", [
-    MAPPOConfig(), MAACConfig(), MADDPGConfig(), MASACConfig(), QMIXConfig(),
+    MAPPOConfig(), MAACConfig(), MADDPGConfig(), MASACConfig(), QMIXConfig(), SNMAPPOConfig(),
 ])
 def test_documented_yaml_matches_python_defaults(config):
     path = Path(__file__).parents[1] / "examples/configs/algorithms" / (config.algorithm + ".yaml")

@@ -1,0 +1,146 @@
+# Experimental: full default configuration; solver acceptance must pass before long runs.
+schema_version: 2
+algorithm: sn_mappo
+leader:
+  schema_version: 2
+  algorithm: mappo
+  policy:
+    kind: independent_gaussian
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 2
+    encoder:
+      kind: identity
+  critic:
+    kind: centralized_value
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 1
+    encoder:
+      kind: identity
+    graph: null
+  loss:
+    clip_ratio: 0.15
+    value_coefficient: 0.5
+    entropy_coefficient: 0.001
+    normalize_targets: false
+  advantage:
+    kind: gae
+    gamma: 0.99
+    lambda: 0.95
+    normalize: true
+    normalization_scope: per_agent
+  rollout:
+    horizon: null
+  update:
+    learning_rate: 0.0003
+    actor_learning_rate: 0.0001
+    critic_learning_rate: null
+    epochs: 4
+    mini_batch_size: 96
+    max_grad_norm: 1.0
+    actor_max_grad_norm: null
+    critic_max_grad_norm: null
+    value_clip_ratio: null
+    sequence_length: 32
+coordinator:
+  schema_version: 2
+  algorithm: mappo
+  policy:
+    kind: independent_gaussian
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 1
+    encoder:
+      kind: identity
+  critic:
+    kind: centralized_value
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 1
+    encoder:
+      kind: identity
+    graph: null
+  loss:
+    clip_ratio: 0.15
+    value_coefficient: 0.5
+    entropy_coefficient: 0.001
+    normalize_targets: false
+  advantage:
+    kind: gae
+    gamma: 0.99
+    lambda: 0.95
+    normalize: true
+    normalization_scope: per_agent
+  rollout:
+    horizon: null
+  update:
+    learning_rate: 0.0003
+    actor_learning_rate: null
+    critic_learning_rate: null
+    epochs: 4
+    mini_batch_size: 96
+    max_grad_norm: 1.0
+    actor_max_grad_norm: null
+    critic_max_grad_norm: null
+    value_clip_ratio: null
+    sequence_length: 32
+followers:
+  schema_version: 2
+  algorithm: mappo
+  policy:
+    kind: independent_gaussian
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 1
+    encoder:
+      kind: identity
+  critic:
+    kind: centralized_value
+    backbone:
+      kind: gru
+      hidden_dim: 32
+      num_layers: 1
+    encoder:
+      kind: identity
+    graph: null
+  loss:
+    clip_ratio: 0.15
+    value_coefficient: 0.5
+    entropy_coefficient: 0.001
+    normalize_targets: false
+  advantage:
+    kind: gae
+    gamma: 0.99
+    lambda: 0.95
+    normalize: true
+    normalization_scope: per_agent
+  rollout:
+    horizon: null
+  update:
+    learning_rate: 0.0003
+    actor_learning_rate: null
+    critic_learning_rate: null
+    epochs: 4
+    mini_batch_size: 96
+    max_grad_norm: 1.0
+    actor_max_grad_norm: null
+    critic_max_grad_norm: null
+    value_clip_ratio: null
+    sequence_length: 32
+implicit: true
+response:
+  damping: 0.001
+  residual_tolerance: 0.0001
+  max_iterations: 100
+  attempts: 3
+  damping_multiplier: 10.0
+  krylov_dimension: 100  # GMRES restart dimension; max_iterations counts inner iterations.
+kl_coefficient: 0.01
+response_trajectories: 8  # Positive integer; independent actions, shared external scenario per DS.
+response_baseline: leave_one_out  # leave_one_out requires >=2; none is a variance ablation.

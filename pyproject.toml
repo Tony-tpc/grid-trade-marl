@@ -27,6 +27,11 @@ benchmark = [
     "matplotlib>=3.9,<4.0",
     "scipy>=1.11,<2.0",
 ]
+reproduction = [
+    "pandas>=2.2,<3.0",
+    "scipy>=1.14,<2.0",
+    "matplotlib>=3.9,<4.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["marl*"]
