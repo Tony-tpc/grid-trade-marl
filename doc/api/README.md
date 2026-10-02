@@ -2,7 +2,7 @@
 
 [手册首页](../README.md) · [目录职责](../architecture.md)
 
-覆盖全部 marl 源文件、四个原有示例和手册教学脚本；包含私有/嵌套函数，
+覆盖全部 marl 源文件、复现实验、通用示例和手册教学脚本；包含私有/嵌套函数，
 overload 在同一锚点展示最终实现。测试按专题见 [验证导航](../training.md#verification)，
 基准实验入口与内部组织见 [基准说明](../../benchmarks/README.md)。
 
@@ -12,12 +12,8 @@ overload 在同一锚点展示最终实现。测试按专题见 [验证导航](.
 | [doc/examples/train_walkthrough.py](doc-examples-train_walkthrough.md) | 5 |
 | [examples/custom_component.py](examples-custom_component.md) | 5 |
 | [examples/minimal_usage.py](examples-minimal_usage.md) | 1 |
-| [examples/plot_demand_response.py](examples-plot_demand_response.md) | 2 |
-| [examples/prepare_demand_response.py](examples-prepare_demand_response.md) | 1 |
-| [examples/train_demand_response.py](examples-train_demand_response.md) | 4 |
 | [examples/train_energy_maac.py](examples-train_energy_maac.md) | 1 |
 | [examples/train_mappo.py](examples-train_mappo.md) | 1 |
-| [examples/train_sn_mappo.py](examples-train_sn_mappo.md) | 3 |
 | [marl/__init__.py](marl-__init__.md) | 0 |
 | [marl/algorithms/__init__.py](marl-algorithms-__init__.md) | 0 |
 | [marl/algorithms/base.py](marl-algorithms-base.md) | 6 |
@@ -36,8 +32,6 @@ overload 在同一锚点展示最终实现。测试按专题见 [验证导航](.
 | [marl/envs/__init__.py](marl-envs-__init__.md) | 0 |
 | [marl/envs/base.py](marl-envs-base.md) | 14 |
 | [marl/envs/config.py](marl-envs-config.md) | 9 |
-| [marl/envs/demand_response.py](marl-envs-demand_response.md) | 37 |
-| [marl/envs/demand_response_data.py](marl-envs-demand_response_data.md) | 5 |
 | [marl/envs/energy_trading.py](marl-envs-energy_trading.md) | 17 |
 | [marl/envs/energy_trading_adapter.py](marl-envs-energy_trading_adapter.md) | 7 |
 | [marl/envs/memory_cue.py](marl-envs-memory_cue.md) | 6 |
@@ -73,3 +67,11 @@ overload 在同一锚点展示最终实现。测试按专题见 [验证导航](.
 | [marl/training/optimization.py](marl-training-optimization.md) | 15 |
 | [marl/training/sequential.py](marl-training-sequential.md) | 18 |
 | [marl/value_scaling.py](marl-value_scaling.md) | 7 |
+| [reproduction/__init__.py](reproduction-__init__.md) | 0 |
+| [reproduction/sn_mappo/__init__.py](reproduction-sn_mappo-__init__.md) | 0 |
+| [reproduction/sn_mappo/demand_response.py](reproduction-sn_mappo-demand_response.md) | 37 |
+| [reproduction/sn_mappo/demand_response_data.py](reproduction-sn_mappo-demand_response_data.md) | 5 |
+| [reproduction/sn_mappo/plot_demand_response.py](reproduction-sn_mappo-plot_demand_response.md) | 2 |
+| [reproduction/sn_mappo/prepare_demand_response.py](reproduction-sn_mappo-prepare_demand_response.md) | 1 |
+| [reproduction/sn_mappo/train_demand_response.py](reproduction-sn_mappo-train_demand_response.md) | 4 |
+| [reproduction/sn_mappo/train_sn_mappo.py](reproduction-sn_mappo-train_sn_mappo.md) | 3 |

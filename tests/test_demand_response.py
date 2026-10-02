@@ -4,14 +4,19 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from marl.envs.demand_response import (
+from reproduction.sn_mappo.demand_response import (
     DemandResponseConfig,
     DemandResponseEnv,
     FixedLeaderDemandAdapter,
     quadratic_ratio,
     retail_tariff,
 )
-from marl.envs.demand_response_data import OPSD_COLUMNS, OPSD_FILE, DemandProfiles, prepare_opsd
+from reproduction.sn_mappo.demand_response_data import (
+    OPSD_COLUMNS,
+    OPSD_FILE,
+    DemandProfiles,
+    prepare_opsd,
+)
 
 
 def profiles(load=1.0, der=1.0, n=3):

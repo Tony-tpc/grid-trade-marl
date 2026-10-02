@@ -1,8 +1,8 @@
-# examples/train_demand_response.py
+# reproduction/sn_mappo/train_demand_response.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../examples/train_demand_response.py)
+[打开源码](../../reproduction/sn_mappo/train_demand_response.py)
 
 真实 OPSD 日实验：固定 UC 或同步连续 MAPPO，原始诊断与评估分开保存。
 
@@ -19,7 +19,7 @@
 
 ## evaluate
 
-[源码位置](../../examples/train_demand_response.py#L21) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_demand_response.py#L20) · [页内目录](#符号目录)
 
 ```python
 def evaluate(algorithm: MAPPO, environment: DailyDemandAdapter, seed: int) -> dict
@@ -31,7 +31,7 @@ def evaluate(algorithm: MAPPO, environment: DailyDemandAdapter, seed: int) -> di
 
 ## run
 
-[源码位置](../../examples/train_demand_response.py#L57) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_demand_response.py#L56) · [页内目录](#符号目录)
 
 ```python
 def run(args: argparse.Namespace, seed: int) -> dict
@@ -44,7 +44,7 @@ checkpoint；不覆盖已有实验。
 
 ## run.profiles
 
-[源码位置](../../examples/train_demand_response.py#L62) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_demand_response.py#L61) · [页内目录](#符号目录)
 
 ```python
 def profiles(split: str) -> DemandProfiles
@@ -56,7 +56,7 @@ def profiles(split: str) -> DemandProfiles
 
 ## main
 
-[源码位置](../../examples/train_demand_response.py#L118) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_demand_response.py#L117) · [页内目录](#符号目录)
 
 ```python
 def main() -> None

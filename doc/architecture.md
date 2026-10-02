@@ -14,6 +14,7 @@
 | [algorithms](../marl/algorithms) | 算法配置、组件装配、公式接线与更新顺序 | [算法说明](algorithms.md)；具体类直接继承 BaseMARLAlgorithm |
 | [training](../marl/training) | 经验生命周期、训练状态、checkpoint | [训练模块](trainers.md)；不按算法名称分支 |
 | [examples](../examples) | 可运行入口和组件示例 | [minimal_usage](../examples/minimal_usage.py)、[custom_component](../examples/custom_component.py) |
+| [reproduction](../reproduction) | 论文专用环境、数据、入口、配置与验收 | [SN-MAPPO](../reproduction/sn_mappo/README.md)；依赖 marl，算法库不反向导入 |
 | [examples/configs/algorithms](../examples/configs/algorithms) | 五份默认 YAML 及专项实验配置 | [字段全集](../examples/configs/README.md)；没有环境维度 |
 | [examples/configs/environments](../examples/configs/environments) | 环境独立配置 | 数据、玩家数、episode 长度从这里进入环境 |
 | [benchmarks](../benchmarks) | 固定预算训练、独立评估、cross-play、绘图 | [基准说明](../benchmarks/README.md) |

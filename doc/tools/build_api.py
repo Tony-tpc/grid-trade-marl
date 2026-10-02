@@ -496,7 +496,8 @@ def main() -> None:
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     paths = sorted(
-        [*ROOT.glob("marl/**/*.py"), *ROOT.glob("examples/*.py"), *ROOT.glob("doc/examples/*.py")]
+        [*ROOT.glob("marl/**/*.py"), *ROOT.glob("examples/*.py"),
+         *ROOT.glob("reproduction/**/*.py"), *ROOT.glob("doc/examples/*.py")]
     )
     outputs = {}
     index = [
@@ -504,7 +505,7 @@ def main() -> None:
         "",
         "[手册首页](../README.md) · [目录职责](../architecture.md)",
         "",
-        "覆盖全部 marl 源文件、四个原有示例和手册教学脚本；包含私有/嵌套函数，",
+        "覆盖全部 marl 源文件、复现实验、通用示例和手册教学脚本；包含私有/嵌套函数，",
         "overload 在同一锚点展示最终实现。测试按专题见 [验证导航](../training.md#verification)，",
         "基准实验入口与内部组织见 [基准说明](../../benchmarks/README.md)。",
         "",

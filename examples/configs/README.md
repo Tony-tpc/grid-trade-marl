@@ -27,8 +27,9 @@ seed、device、并行环境数和输出路径由脚本/命令行管理。
 
 `algorithm` 决定配置结构；不能只修改名称而保留另一算法的字段。
 
-[连续 MAPPO 小实验](algorithms/mappo_continuous.yaml) 复用同一个 MAPPO 类。
-[SN-MAPPO 完整默认值](algorithms/sn_mappo.yaml) 的三个角色各自使用完整 MAPPO 配置；
+[连续 MAPPO 小实验](../../reproduction/sn_mappo/configs/mappo_continuous.yaml) 复用同一个 MAPPO 类。
+[SN-MAPPO 完整默认值](../../reproduction/sn_mappo/configs/sn_mappo.yaml) 的三个角色各自使用完整 MAPPO 配置；
+两份论文实验配置与环境、入口一起保存在 [独立复现目录](../../reproduction/sn_mappo/README.md)。
 省略角色使用 SN 默认值，显式提供角色时按该角色的 MAPPO 配置解析。
 默认 GRU 已通过三种子的真实日数据残差验收。DS 默认 `response_trajectories=8`，
 同一外部场景独立采样动作；`response_baseline=leave_one_out` 要求至少两条轨迹，

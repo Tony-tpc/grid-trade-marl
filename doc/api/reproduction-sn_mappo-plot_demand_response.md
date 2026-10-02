@@ -1,8 +1,8 @@
-# examples/plot_demand_response.py
+# reproduction/sn_mappo/plot_demand_response.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../examples/plot_demand_response.py)
+[打开源码](../../reproduction/sn_mappo/plot_demand_response.py)
 
 绘制真实诊断和独立评估；散点评估，滚动均值仅用于训练诊断趋势。
 
@@ -17,7 +17,7 @@
 
 ## plot_run
 
-[源码位置](../../examples/plot_demand_response.py#L11) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/plot_demand_response.py#L11) · [页内目录](#符号目录)
 
 ```python
 def plot_run(root: Path) -> None
@@ -31,7 +31,7 @@ diagnostics.png；评估仅散点，训练趋势为尾随均值。
 
 ## main
 
-[源码位置](../../examples/plot_demand_response.py#L61) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/plot_demand_response.py#L61) · [页内目录](#符号目录)
 
 ```python
 def main() -> None

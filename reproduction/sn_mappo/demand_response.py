@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass
 import numpy as np
 
 from marl.envs.base import ActionKind, EnvironmentAdapter, EnvironmentSpec, EnvironmentStep
-from marl.envs.demand_response_data import DemandProfiles
 from marl.envs.sequential import SequentialSpec
+from reproduction.sn_mappo.demand_response_data import DemandProfiles
 
 
 @dataclass(frozen=True, slots=True)

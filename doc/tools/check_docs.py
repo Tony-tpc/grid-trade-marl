@@ -28,7 +28,7 @@ def main() -> None:
             ROOT / "README.md",
             *(
                 page
-                for folder in ("doc", "docs", "examples", "marl", "benchmarks")
+                for folder in ("doc", "docs", "examples", "marl", "benchmarks", "reproduction")
                 for page in (ROOT / folder).rglob("*.md")
             ),
         }

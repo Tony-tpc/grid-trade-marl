@@ -9,7 +9,9 @@
 
 ## SN-MAPPO 小规模复现工作区
 
-[审计、修订决定、任务计划与实际验收](docs/sn_mappo_reproduction.md)。
+[审计、修订决定、任务计划与实际验收](reproduction/sn_mappo/README.md)。
+环境、数据处理、训练/绘图入口和论文配置集中在 `reproduction/sn_mappo/`，
+通用算法与训练组件由 `marl` 提供。环境公共类型从 `reproduction.sn_mappo` 导入。
 新增公开 OPSD 数据准备、UC/Consumer 物理环境、连续 MAPPO 和双阶段实验入口。
 连续 MAPPO 复用原 PPO/GAE/循环片段与 checkpoint；SN-MAPPO 另组合角色和 DiCE/GMRES。
 DS 使用 8 条独立动作轨迹、leave-one-out baseline 和一致的上下层经济目标。
@@ -18,11 +20,11 @@ DS 使用 8 条独立动作轨迹、leave-one-out baseline 和一致的上下层
 
 ```powershell
 python -m pip install -e ".[dev,reproduction]"
-python -m examples.prepare_demand_response
-python -m examples.train_demand_response --consumers 3 --steps 20000
-python -m examples.train_sn_mappo --first-order --steps 20000
-python -m examples.train_sn_mappo  # 默认每个 seed 一周期；二阶残差失败即停止
-python -m examples.plot_demand_response
+python -m reproduction.sn_mappo.prepare_demand_response
+python -m reproduction.sn_mappo.train_demand_response --consumers 3 --steps 20000
+python -m reproduction.sn_mappo.train_sn_mappo --first-order --steps 20000
+python -m reproduction.sn_mappo.train_sn_mappo  # 默认每个 seed 一周期；二阶残差失败即停止
+python -m reproduction.sn_mappo.plot_demand_response
 ```
 
 训练产物在忽略目录 `runs/sn_mappo/`。在 worktree 中可直接使用主仓库的已验证解释器，

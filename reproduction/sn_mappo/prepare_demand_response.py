@@ -1,8 +1,8 @@
-"""python -m examples.prepare_demand_response --output runs/sn_mappo/data"""
+"""python -m reproduction.sn_mappo.prepare_demand_response --output runs/sn_mappo/data"""
 import argparse
 import json
 
-from marl.envs.demand_response_data import prepare_opsd
+from reproduction.sn_mappo.demand_response_data import prepare_opsd
 
 
 def main() -> None:

@@ -43,7 +43,7 @@ GitHub 支持源码 `#L行号`；若本地阅读器不能定位行号，可打�
 - [新环境完整实现](examples/cue_environment.py)：固定长度、逐智能体奖励教学环境。
 - [训练与续训](examples/train_walkthrough.py)：MAPPO/MAAC、循环策略、自定义 critic。
 - [API 生成工具](tools/build_api.py)：只解析源码，不导入或运行算法。
-- [文档检查](tools/check_docs.py)：检查根 README 及 doc/docs/examples/marl/benchmarks 下 Markdown
+- [文档检查](tools/check_docs.py)：检查根 README 及 doc/docs/examples/marl/benchmarks/reproduction 下 Markdown
   的本地链接、锚点、源码行号和核心函数注释覆盖；不验证外部网址可达性或论文结论。
 
 ```powershell

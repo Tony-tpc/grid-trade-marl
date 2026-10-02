@@ -12,10 +12,9 @@ import torch
 
 from marl.algorithms import MAPPO, MAPPOConfig
 from marl.config import config_to_dict, load_algorithm_config
-from marl.envs.demand_response import DailyDemandAdapter, DemandResponseConfig
-from marl.envs.demand_response_data import DemandProfiles
 from marl.experiment import build_experiment
 from marl.training import OnPolicyTrainer
+from reproduction.sn_mappo import DailyDemandAdapter, DemandProfiles, DemandResponseConfig
 
 
 def evaluate(algorithm: MAPPO, environment: DailyDemandAdapter, seed: int) -> dict:
@@ -120,7 +119,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data', default='runs/sn_mappo/data')
     parser.add_argument('--output', default='runs/sn_mappo/fixed_uc')
-    parser.add_argument('--algorithm', default='examples/configs/algorithms/mappo_continuous.yaml')
+    parser.add_argument('--algorithm',
+                        default=Path(__file__).parent/'configs/mappo_continuous.yaml')
     parser.add_argument('--mode', choices=['fixed', 'synchronous'], default='fixed')
     parser.add_argument('--consumers', type=int, choices=[1, 3], default=3)
     parser.add_argument('--seeds', type=int, nargs='+', default=[0, 1, 2])

@@ -1,8 +1,8 @@
-# examples/train_sn_mappo.py
+# reproduction/sn_mappo/train_sn_mappo.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../examples/train_sn_mappo.py)
+[打开源码](../../reproduction/sn_mappo/train_sn_mappo.py)
 
 顺序 1+3 实验：默认仅一轮数值验收；求解不达标时记录并停止长训练。
 
@@ -18,7 +18,7 @@
 
 ## evaluate
 
-[源码位置](../../examples/train_sn_mappo.py#L22) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_sn_mappo.py#L21) · [页内目录](#符号目录)
 
 ```python
 def evaluate(algorithm: SNMAPPO, environment: SequentialEnvironment, seed: int) -> dict
@@ -30,7 +30,7 @@ def evaluate(algorithm: SNMAPPO, environment: SequentialEnvironment, seed: int) 
 
 ## run
 
-[源码位置](../../examples/train_sn_mappo.py#L66) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_sn_mappo.py#L65) · [页内目录](#符号目录)
 
 ```python
 def run(args: argparse.Namespace, seed: int) -> None
@@ -43,7 +43,7 @@ checkpoint；不覆盖已有实验。
 
 ## main
 
-[源码位置](../../examples/train_sn_mappo.py#L119) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/train_sn_mappo.py#L118) · [页内目录](#符号目录)
 
 ```python
 def main() -> None

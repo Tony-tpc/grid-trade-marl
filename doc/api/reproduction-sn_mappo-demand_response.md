@@ -1,8 +1,8 @@
-# marl/envs/demand_response.py
+# reproduction/sn_mappo/demand_response.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../marl/envs/demand_response.py)
+[打开源码](../../reproduction/sn_mappo/demand_response.py)
 
 一致性修订的 UC/Consumer 电力市场；算法无关的阶段和确定性清算。
 
@@ -52,7 +52,7 @@
 
 ## DemandResponseConfig
 
-[源码位置](../../marl/envs/demand_response.py#L14) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L14) · [页内目录](#符号目录)
 
 `class DemandResponseConfig()`
 
@@ -86,7 +86,7 @@ projection_tolerance: float = 1e-07
 
 ## DemandResponseConfig.__post_init__
 
-[源码位置](../../marl/envs/demand_response.py#L36) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L36) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -98,7 +98,7 @@ def __post_init__(self) -> None
 
 ## retail_tariff
 
-[源码位置](../../marl/envs/demand_response.py#L56) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L56) · [页内目录](#符号目录)
 
 ```python
 def retail_tariff(local_slot: int, cumulative_kwh: np.ndarray) -> np.ndarray
@@ -110,7 +110,7 @@ Table II 三档价格，返回逐消费者价格 [N]；月初累计 UC 购电为
 
 ## quadratic_ratio
 
-[源码位置](../../marl/envs/demand_response.py#L67) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L67) · [页内目录](#符号目录)
 
 ```python
 def quadratic_ratio(adjustment: np.ndarray, denominator: np.ndarray) -> np.ndarray
@@ -122,7 +122,7 @@ def quadratic_ratio(adjustment: np.ndarray, denominator: np.ndarray) -> np.ndarr
 
 ## LeaderCommitment
 
-[源码位置](../../marl/envs/demand_response.py#L81) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L81) · [页内目录](#符号目录)
 
 `class LeaderCommitment()`
 
@@ -143,7 +143,7 @@ der_offer: float
 
 ## LeaderCommitment.array
 
-[源码位置](../../marl/envs/demand_response.py#L90) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L90) · [页内目录](#符号目录)
 
 ```python
 def array(self) -> np.ndarray
@@ -155,7 +155,7 @@ def array(self) -> np.ndarray
 
 ## DemandResponseEnv
 
-[源码位置](../../marl/envs/demand_response.py#L95) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L95) · [页内目录](#符号目录)
 
 `class DemandResponseEnv(EnvironmentAdapter)`
 
@@ -169,7 +169,7 @@ def array(self) -> np.ndarray
 
 ## DemandResponseEnv.__init__
 
-[源码位置](../../marl/envs/demand_response.py#L104) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L104) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, profiles: DemandProfiles, config: DemandResponseConfig | None=None)
@@ -181,7 +181,7 @@ def __init__(self, profiles: DemandProfiles, config: DemandResponseConfig | None
 
 ## DemandResponseEnv.spec
 
-[源码位置](../../marl/envs/demand_response.py#L125) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L125) · [页内目录](#符号目录)
 
 ```python
 def spec(self) -> EnvironmentSpec
@@ -193,7 +193,7 @@ def spec(self) -> EnvironmentSpec
 
 ## DemandResponseEnv.leader_spec
 
-[源码位置](../../marl/envs/demand_response.py#L130) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L130) · [页内目录](#符号目录)
 
 ```python
 def leader_spec(self) -> EnvironmentSpec
@@ -205,7 +205,7 @@ def leader_spec(self) -> EnvironmentSpec
 
 ## DemandResponseEnv.follower_spec
 
-[源码位置](../../marl/envs/demand_response.py#L136) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L136) · [页内目录](#符号目录)
 
 ```python
 def follower_spec(self) -> EnvironmentSpec
@@ -217,7 +217,7 @@ def follower_spec(self) -> EnvironmentSpec
 
 ## DemandResponseEnv.sequential_spec
 
-[源码位置](../../marl/envs/demand_response.py#L142) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L142) · [页内目录](#符号目录)
 
 ```python
 def sequential_spec(self) -> SequentialSpec
@@ -229,7 +229,7 @@ def sequential_spec(self) -> SequentialSpec
 
 ## DemandResponseEnv.checkpoint_context
 
-[源码位置](../../marl/envs/demand_response.py#L151) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L151) · [页内目录](#符号目录)
 
 ```python
 def checkpoint_context(self) -> dict[str, object]
@@ -241,7 +241,7 @@ def checkpoint_context(self) -> dict[str, object]
 
 ## DemandResponseEnv.reset
 
-[源码位置](../../marl/envs/demand_response.py#L158) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L158) · [页内目录](#符号目录)
 
 ```python
 def reset(self, seed: int | None=None) -> EnvironmentStep
@@ -253,7 +253,7 @@ def reset(self, seed: int | None=None) -> EnvironmentStep
 
 ## DemandResponseEnv._observation
 
-[源码位置](../../marl/envs/demand_response.py#L169) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L169) · [页内目录](#符号目录)
 
 ```python
 def _observation(self, rewards: np.ndarray, info: dict) -> EnvironmentStep
@@ -266,7 +266,7 @@ def _observation(self, rewards: np.ndarray, info: dict) -> EnvironmentStep
 
 ## DemandResponseEnv._shift_bounds
 
-[源码位置](../../marl/envs/demand_response.py#L196) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L196) · [页内目录](#符号目录)
 
 ```python
 def _shift_bounds(self) -> tuple[np.ndarray, np.ndarray]
@@ -278,7 +278,7 @@ def _shift_bounds(self) -> tuple[np.ndarray, np.ndarray]
 
 ## DemandResponseEnv._actions
 
-[源码位置](../../marl/envs/demand_response.py#L211) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L211) · [页内目录](#符号目录)
 
 ```python
 def _actions(self, actions: np.ndarray, shape: tuple[int, ...]) -> np.ndarray
@@ -290,7 +290,7 @@ def _actions(self, actions: np.ndarray, shape: tuple[int, ...]) -> np.ndarray
 
 ## DemandResponseEnv.commit_leader
 
-[源码位置](../../marl/envs/demand_response.py#L218) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L218) · [页内目录](#符号目录)
 
 ```python
 def commit_leader(self, action: np.ndarray) -> EnvironmentStep
@@ -302,7 +302,7 @@ def commit_leader(self, action: np.ndarray) -> EnvironmentStep
 
 ## DemandResponseEnv._project
 
-[源码位置](../../marl/envs/demand_response.py#L248) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L248) · [页内目录](#符号目录)
 
 ```python
 def _project(self, requests: np.ndarray) -> tuple[np.ndarray, float]
@@ -315,7 +315,7 @@ def _project(self, requests: np.ndarray) -> tuple[np.ndarray, float]
 
 ## DemandResponseEnv.settle
 
-[源码位置](../../marl/envs/demand_response.py#L311) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L311) · [页内目录](#符号目录)
 
 ```python
 def settle(self, actions: np.ndarray) -> EnvironmentStep
@@ -327,7 +327,7 @@ def settle(self, actions: np.ndarray) -> EnvironmentStep
 
 ## DemandResponseEnv.step
 
-[源码位置](../../marl/envs/demand_response.py#L370) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L370) · [页内目录](#符号目录)
 
 ```python
 def step(self, actions: np.ndarray) -> EnvironmentStep
@@ -340,7 +340,7 @@ wrapper 会准备下一承诺。
 
 ## FixedLeaderDemandAdapter
 
-[源码位置](../../marl/envs/demand_response.py#L380) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L380) · [页内目录](#符号目录)
 
 `class FixedLeaderDemandAdapter(EnvironmentAdapter)`
 
@@ -350,7 +350,7 @@ wrapper 会准备下一承诺。
 
 ## FixedLeaderDemandAdapter.__init__
 
-[源码位置](../../marl/envs/demand_response.py#L382) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L382) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, environment: DemandResponseEnv, leader_action: tuple[float, ...]=(0.0, 0.0, 1.0, 0.0))
@@ -362,7 +362,7 @@ def __init__(self, environment: DemandResponseEnv, leader_action: tuple[float, .
 
 ## FixedLeaderDemandAdapter.spec
 
-[源码位置](../../marl/envs/demand_response.py#L389) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L389) · [页内目录](#符号目录)
 
 ```python
 def spec(self) -> EnvironmentSpec
@@ -374,7 +374,7 @@ def spec(self) -> EnvironmentSpec
 
 ## FixedLeaderDemandAdapter._followers
 
-[源码位置](../../marl/envs/demand_response.py#L393) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L393) · [页内目录](#符号目录)
 
 ```python
 def _followers(self, step: EnvironmentStep) -> EnvironmentStep
@@ -386,7 +386,7 @@ def _followers(self, step: EnvironmentStep) -> EnvironmentStep
 
 ## FixedLeaderDemandAdapter.reset
 
-[源码位置](../../marl/envs/demand_response.py#L400) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L400) · [页内目录](#符号目录)
 
 ```python
 def reset(self, seed: int | None=None) -> EnvironmentStep
@@ -398,7 +398,7 @@ def reset(self, seed: int | None=None) -> EnvironmentStep
 
 ## FixedLeaderDemandAdapter.step
 
-[源码位置](../../marl/envs/demand_response.py#L405) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L405) · [页内目录](#符号目录)
 
 ```python
 def step(self, actions: np.ndarray) -> EnvironmentStep
@@ -411,7 +411,7 @@ wrapper 会准备下一承诺。
 
 ## DailyDemandAdapter
 
-[源码位置](../../marl/envs/demand_response.py#L418) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L418) · [页内目录](#符号目录)
 
 `class DailyDemandAdapter(EnvironmentAdapter)`
 
@@ -421,7 +421,7 @@ wrapper 会准备下一承诺。
 
 ## DailyDemandAdapter.__init__
 
-[源码位置](../../marl/envs/demand_response.py#L420) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L420) · [页内目录](#符号目录)
 
 ```python
 def __init__(self, profiles: DemandProfiles, config: DemandResponseConfig | None=None, fixed_leader: tuple[float, ...] | None=None)
@@ -433,7 +433,7 @@ def __init__(self, profiles: DemandProfiles, config: DemandResponseConfig | None
 
 ## DailyDemandAdapter._build
 
-[源码位置](../../marl/envs/demand_response.py#L432) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L432) · [页内目录](#符号目录)
 
 ```python
 def _build(self, start: int) -> EnvironmentAdapter
@@ -445,7 +445,7 @@ def _build(self, start: int) -> EnvironmentAdapter
 
 ## DailyDemandAdapter.spec
 
-[源码位置](../../marl/envs/demand_response.py#L439) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L439) · [页内目录](#符号目录)
 
 ```python
 def spec(self) -> EnvironmentSpec
@@ -457,7 +457,7 @@ def spec(self) -> EnvironmentSpec
 
 ## DailyDemandAdapter.reset
 
-[源码位置](../../marl/envs/demand_response.py#L443) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L443) · [页内目录](#符号目录)
 
 ```python
 def reset(self, seed: int | None=None) -> EnvironmentStep
@@ -469,7 +469,7 @@ def reset(self, seed: int | None=None) -> EnvironmentStep
 
 ## DailyDemandAdapter.step
 
-[源码位置](../../marl/envs/demand_response.py#L451) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L451) · [页内目录](#符号目录)
 
 ```python
 def step(self, actions: np.ndarray) -> EnvironmentStep
@@ -482,7 +482,7 @@ wrapper 会准备下一承诺。
 
 ## DailyDemandAdapter.sequential_spec
 
-[源码位置](../../marl/envs/demand_response.py#L459) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L459) · [页内目录](#符号目录)
 
 ```python
 def sequential_spec(self) -> SequentialSpec
@@ -494,7 +494,7 @@ def sequential_spec(self) -> SequentialSpec
 
 ## DailyDemandAdapter.checkpoint_context
 
-[源码位置](../../marl/envs/demand_response.py#L466) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L466) · [页内目录](#符号目录)
 
 ```python
 def checkpoint_context(self) -> dict[str, object]
@@ -506,7 +506,7 @@ def checkpoint_context(self) -> dict[str, object]
 
 ## DailyDemandAdapter.commit_leader
 
-[源码位置](../../marl/envs/demand_response.py#L473) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L473) · [页内目录](#符号目录)
 
 ```python
 def commit_leader(self, action: np.ndarray) -> EnvironmentStep
@@ -518,7 +518,7 @@ def commit_leader(self, action: np.ndarray) -> EnvironmentStep
 
 ## DailyDemandAdapter.settle
 
-[源码位置](../../marl/envs/demand_response.py#L479) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response.py#L479) · [页内目录](#符号目录)
 
 ```python
 def settle(self, actions: np.ndarray) -> EnvironmentStep

@@ -13,10 +13,9 @@ import torch
 from marl.algorithms import SNMAPPO, SNMAPPOConfig
 from marl.config import config_to_dict, load_algorithm_config
 from marl.core.recurrent import RecurrentState
-from marl.envs.demand_response import DailyDemandAdapter, DemandResponseEnv
-from marl.envs.demand_response_data import DemandProfiles
 from marl.envs.sequential import SequentialEnvironment
 from marl.experiment import build_experiment
+from reproduction.sn_mappo import DailyDemandAdapter, DemandProfiles, DemandResponseEnv
 
 
 def evaluate(algorithm: SNMAPPO, environment: SequentialEnvironment, seed: int) -> dict:
@@ -119,7 +118,7 @@ def run(args: argparse.Namespace, seed: int) -> None:
 def main() -> None:
     """解析脚本命令行并执行文档所述入口；输出写入显式指定的本地目录。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--algorithm', default='examples/configs/algorithms/sn_mappo.yaml')
+    parser.add_argument('--algorithm', default=Path(__file__).parent/'configs/sn_mappo.yaml')
     parser.add_argument('--data', default='runs/sn_mappo/data')
     parser.add_argument('--output', default='runs/sn_mappo/sequential')
     parser.add_argument('--steps', type=int, default=864)

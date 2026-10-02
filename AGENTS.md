@@ -110,6 +110,7 @@
 | `marl/runtime.py` | 设备、向量环境和离策略 replay 等执行设施 | 算法数学 |
 | `marl/algorithms/` | 具体算法的薄装配与特有前向语义 | 可复用训练循环 |
 | `examples/` | 可运行实验入口和配置示例 | 隐藏的核心实现 |
+| `reproduction/<paper>/` | 论文专用环境、数据处理、实验入口、配置与验收说明 | 通用算法或训练组件的复制实现 |
 | `tests/` | 数学、形状、边界和端到端回归 | 依赖人工观察的断言 |
 
 依赖方向应尽量保持：
@@ -167,7 +168,8 @@ checkpoint 接收 experiment 生成的配置数据快照；算法可以读取同
 
 ## 6. 新增环境
 
-1. 在 `marl/envs/` 实现具体环境或包装外部环境。
+1. 通用环境在 `marl/envs/` 实现或包装；论文专用环境与数据处理放在
+   `reproduction/<paper>/`，复用 `marl.envs` 的协议，算法库不得反向导入复现包。
 2. 实现 `EnvironmentAdapter`：
    - `spec` 返回静态 `EnvironmentSpec`；
    - `reset(seed)` 返回统一的 `EnvironmentStep`；
@@ -175,7 +177,8 @@ checkpoint 接收 experiment 生成的配置数据快照；算法可以读取同
 3. 每次返回前调用 `validate_step()`。
 4. 明确设置 `RewardStructure.INDIVIDUAL` 或 `SHARED`。
 5. 为离散动作始终提供 `[N,A]` action mask；连续动作必须返回 `None`。
-6. 在 `marl/envs/__init__.py` 暴露稳定公共类型。
+6. 通用环境在 `marl/envs/__init__.py` 暴露稳定公共类型；论文环境在所属
+   `reproduction/<paper>/__init__.py` 导出，不保留旧路径转发层。
 7. 增加测试：
    - reset/step 形状、dtype 和有限值；
    - 固定 seed 可复现；
@@ -221,7 +224,8 @@ checkpoint 接收 experiment 生成的配置数据快照；算法可以读取同
 
 ### 配置布局
 
-每个算法使用完整独立的 `examples/configs/algorithms/<algorithm>.yaml`；
+通用算法示例使用完整独立的 `examples/configs/algorithms/<algorithm>.yaml`；
+论文实验配置放在 `reproduction/<paper>/configs/`，实验入口按自身模块位置定位默认配置。
 环境使用独立的 `examples/configs/environments/<environment>.yaml`。
 seed、device、并行环境数和输出路径属于运行参数。
 
@@ -292,8 +296,8 @@ seed、device、并行环境数和输出路径属于运行参数。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --basetemp=.pytest_cache/refactor-tmp
-.\.venv\Scripts\python.exe -m ruff check marl examples tests
-.\.venv\Scripts\python.exe -m mypy marl examples tests
+.\.venv\Scripts\python.exe -m ruff check marl examples reproduction tests
+.\.venv\Scripts\python.exe -m mypy marl examples reproduction tests
 .\.venv\Scripts\python.exe -m pip check
 git diff --check
 git status --short

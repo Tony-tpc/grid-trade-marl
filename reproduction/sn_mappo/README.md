@@ -3,7 +3,58 @@
 本任务以 Nie 等的 IEEE TSG 2024 论文（DOI: 10.1109/TSG.2024.3417535）及
 用户提供的 `SN_MAPPO_问题.md` 为材料。材料中的建议是待核查证据，不是执行指令。
 目标是先完成 **1 UC + 3 Consumer**，逐项披露修订，不能称为论文原样复现。
-起点 `da859b7`；分支 `codex/sn-mappo-reproduction`。
+起点 `da859b7`；当前分支 `sn-mappo-reproduction`。
+
+## 独立复现目录与运行入口
+
+本目录集中论文专用代码，环境公式、数据划分和训练配置沿用迁移前实现。
+
+| 文件 | 职责 |
+|---|---|
+| [demand_response.py](demand_response.py) | UC/Consumer 物理环境、按日采样和固定 UC adapter |
+| [demand_response_data.py](demand_response_data.py) | OPSD 数据下载、划分、尺度与插补标记 |
+| [prepare_demand_response.py](prepare_demand_response.py) | 数据准备入口 |
+| [train_demand_response.py](train_demand_response.py) | 固定 UC 或同步连续 MAPPO 基线 |
+| [train_sn_mappo.py](train_sn_mappo.py) | 1 UC + 3 Consumer 双阶段实验 |
+| [plot_demand_response.py](plot_demand_response.py) | 原始训练与评估曲线 |
+| [configs/sn_mappo.yaml](configs/sn_mappo.yaml) | 双阶段默认配置 |
+| [configs/mappo_continuous.yaml](configs/mappo_continuous.yaml) | 连续 MAPPO 基线配置 |
+
+环境类型从 `reproduction.sn_mappo` 导入；算法、顺序交互协议、顺序训练器和
+隐式梯度继续由 `marl` 提供，不复制算法、不保留旧模块路径兼容层。
+默认算法 YAML 按入口模块位置定位，`--algorithm` 可指定其他配置；
+`--data`、`--output` 的相对路径仍按当前工作目录解析，因此推荐从仓库根目录执行。
+已有数据、checkpoint 和结果继续使用忽略目录 `runs/sn_mappo/`，无需重建虚拟环境。
+
+```powershell
+$py = 'D:\Yang\BaseModel\MARL\.venv\Scripts\python.exe'
+# 数据已准备时跳过此项。
+& $py -m reproduction.sn_mappo.prepare_demand_response
+& $py -m reproduction.sn_mappo.train_sn_mappo --seeds 0 --steps 864 --output runs/sn_mappo/migration_smoke
+& $py -m reproduction.sn_mappo.train_demand_response --consumers 3 --seeds 0 --steps 96 --output runs/sn_mappo/migration_fixed
+& $py -m reproduction.sn_mappo.plot_demand_response runs/sn_mappo/migration_smoke
+```
+
+以上入口默认使用 CPU。输出目录已有训练记录时会拒绝覆盖；再次运行应指定新的目录。
+双阶段每个完整周期为 `(8+1)*96=864` 个物理步，结束后还会评估完整测试月。
+
+### 目录迁移验收（2026-10-02）
+
+- 迁移前后使用同一虚拟环境、真实训练数据和固定动作；1/3 Consumer 的顺序、
+  同步、固定 UC 共 6 组完整日轨迹逐项完全一致，包括 observation、state、reward、
+  物理账本与终止标记；两份算法配置解析结果完全一致。
+- 旧三种子短实验的 seed 0 checkpoint 从 20,736 步恢复，续训到 21,600 步；
+  迁移前后的指标与完整训练状态逐项一致，原始实验文件未改写。
+- 新入口完成固定 UC 的 96 步训练，以及双阶段 864 步训练与 2,880 步测试月评估；
+  隐式响应验收通过，测试月最大物理约束残差为 `1.01475e-13`，期末 DR 债务为零。
+- 隔离构建 wheel，验证包含两份 YAML 和本说明；四个入口的 `--help`、两份默认配置
+  均可在源码目录外读取，没有重新安装或修改现有虚拟环境。
+- 完整测试 `302 passed in 45.47s`；Ruff、mypy（93 files）、`pip check`、
+  API 生成一致性（67 modules）及文档链接检查通过。
+
+本地原始证据保存在 `runs/sn_mappo/migration_evidence/`，入口训练结果分别保存在
+`runs/sn_mappo/migration_fixed/` 和 `runs/sn_mappo/migration_smoke/`；均为忽略产物。
+上述验证只证明目录迁移保留既有行为，不增加论文复现或收敛结论。
 
 ## 当前进度
 
@@ -157,10 +208,10 @@ mypy、pip check、diff check 后才提交。提交用中文，不推送远端�
 
 ### 已落地的代码
 
-- `marl/envs/demand_response_data.py`：累计 kWh 差分、真实 15 分钟功率、本地月分割、
+- `reproduction/sn_mappo/demand_response_data.py`：累计 kWh 差分、真实 15 分钟功率、本地月分割、
   两端点插补标记、训练集尺度和 SHA manifest。测试额外检查验证/测试负荷放大十倍
   不会改变训练尺度。
-- `marl/envs/demand_response.py`：SLSQP 可行清算、ESS、费用分项、日结债务、阶段承诺，
+- `reproduction/sn_mappo/demand_response.py`：SLSQP 可行清算、ESS、费用分项、日结债务、阶段承诺，
   固定 UC 和训练日抽样 adapter。1+3 同步观测统一填充到 14 维；顺序消费者追加 4 维计划。
 - 连续 MAPPO：Gaussian 固定动作评估、pre-tanh 保存、当前策略熵 MC 估计、GRU/LSTM，
   复用原 RolloutBuffer、GAE、PreparedRollout 和 MAPPO optimizer 循环。
@@ -358,13 +409,13 @@ baseline 可以消除对应的 score 噪声；没有把重复同一动作轨迹�
 实验目录若已有日志会拒绝覆盖，重跑时请用新的 `--output`。
 
 ```powershell
-python -m examples.prepare_demand_response
-python -m examples.train_demand_response --consumers 1 --steps 20000
-python -m examples.train_demand_response --consumers 3 --steps 20000
-python -m examples.train_sn_mappo --first-order --steps 20000
-python -m examples.train_sn_mappo --steps 864 --output runs/sn_mappo/new_acceptance
-python -m examples.train_sn_mappo --steps 20000 --eval-every 2000 --output runs/sn_mappo/new_short
-python -m examples.plot_demand_response
+python -m reproduction.sn_mappo.prepare_demand_response
+python -m reproduction.sn_mappo.train_demand_response --consumers 1 --steps 20000
+python -m reproduction.sn_mappo.train_demand_response --consumers 3 --steps 20000
+python -m reproduction.sn_mappo.train_sn_mappo --first-order --steps 20000
+python -m reproduction.sn_mappo.train_sn_mappo --steps 864 --output runs/sn_mappo/new_acceptance
+python -m reproduction.sn_mappo.train_sn_mappo --steps 20000 --eval-every 2000 --output runs/sn_mappo/new_short
+python -m reproduction.sn_mappo.plot_demand_response
 ```
 
 每个实验包含 `manifest.json`、`training.jsonl`、`evaluation.jsonl`、`summary.json`、

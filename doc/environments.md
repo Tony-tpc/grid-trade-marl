@@ -68,7 +68,9 @@
 5. rewards 读这次动作造成的收益，每个分量有独立测试。
 6. 返回前调用 validate_step，离散 mask 包括最终观测所需的合法占位/下一动作语义。
 7. Python 直接 `build_experiment(adapter, config)`；多个独立 adapter 包进 SyncVectorEnv。
-8. 稳定接口加入 [envs/__init__.py](../marl/envs/__init__.py)，再补相应配置与测试。
+8. 通用环境的稳定接口加入 [envs/__init__.py](../marl/envs/__init__.py)，再补相应配置与测试。
+   论文专用环境集中在 `reproduction/<paper>/` 并由该包导出，复用相同环境协议；
+   参见 [SN-MAPPO 需求响应实验](../reproduction/sn_mappo/README.md)。
 
 连续策略的标准动作常是 [-1,1]。真实控制量若在 [low,high]，在 adapter 中执行
 `low + (a+1)/2*(high-low)`，replay 仍保存算法标准动作 a；否则 critic 训练看到的动作与

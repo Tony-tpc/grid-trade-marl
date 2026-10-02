@@ -1,4 +1,4 @@
-"""环境与算法之间的稳定接口。新论文的环境实现放在本目录。"""
+"""环境与算法之间的稳定接口及通用环境；论文专用环境位于 reproduction。"""
 
 from __future__ import annotations
 
@@ -21,12 +21,6 @@ from marl.envs.config import (
     load_environment_config,
     mpe2_simple_adversary_config_from_environment,
 )
-from marl.envs.demand_response import (
-    DemandResponseConfig,
-    DemandResponseEnv,
-    FixedLeaderDemandAdapter,
-)
-from marl.envs.demand_response_data import DemandProfiles
 from marl.envs.energy_trading import EnergyProfiles, EnergyTradingConfig, EnergyTradingEnv
 from marl.envs.energy_trading_adapter import EnergyTradingAdapter
 from marl.envs.memory_cue import MemoryCueAdapter
@@ -37,10 +31,6 @@ from marl.envs.mpe2_simple_adversary_adapter import (
 )
 
 __all__ = [
-    "DemandProfiles",
-    "DemandResponseConfig",
-    "DemandResponseEnv",
-    "FixedLeaderDemandAdapter",
     "HistoryLayout",
     "StateLayout",
     "MemoryCueAdapter",

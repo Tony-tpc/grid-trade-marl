@@ -1,8 +1,8 @@
-# marl/envs/demand_response_data.py
+# reproduction/sn_mappo/demand_response_data.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../marl/envs/demand_response_data.py)
+[打开源码](../../reproduction/sn_mappo/demand_response_data.py)
 
 OPSD 累计表读数转区间功率；数据处理依赖只在准备入口加载。
 
@@ -20,7 +20,7 @@ OPSD 累计表读数转区间功率；数据处理依赖只在准备入口加载
 
 ## DemandProfiles
 
-[源码位置](../../marl/envs/demand_response_data.py#L23) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response_data.py#L23) · [页内目录](#符号目录)
 
 `class DemandProfiles()`
 
@@ -43,7 +43,7 @@ source_sha256: str
 
 ## DemandProfiles.__post_init__
 
-[源码位置](../../marl/envs/demand_response_data.py#L34) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response_data.py#L34) · [页内目录](#符号目录)
 
 ```python
 def __post_init__(self) -> None
@@ -55,7 +55,7 @@ def __post_init__(self) -> None
 
 ## DemandProfiles.window
 
-[源码位置](../../marl/envs/demand_response_data.py#L56) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response_data.py#L56) · [页内目录](#符号目录)
 
 ```python
 def window(self, start: int, horizon: int) -> DemandProfiles
@@ -67,7 +67,7 @@ def window(self, start: int, horizon: int) -> DemandProfiles
 
 ## DemandProfiles.load
 
-[源码位置](../../marl/envs/demand_response_data.py#L68) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response_data.py#L68) · [页内目录](#符号目录)
 
 ```python
 def load(cls, path: str | Path) -> DemandProfiles
@@ -80,7 +80,7 @@ DemandProfiles；拒绝缺测、负值或不连续区间。
 
 ## prepare_opsd
 
-[源码位置](../../marl/envs/demand_response_data.py#L81) · [页内目录](#符号目录)
+[源码位置](../../reproduction/sn_mappo/demand_response_data.py#L81) · [页内目录](#符号目录)
 
 ```python
 def prepare_opsd(destination: str | Path) -> dict[str, object]

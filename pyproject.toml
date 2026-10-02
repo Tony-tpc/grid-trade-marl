@@ -34,7 +34,10 @@ reproduction = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["marl*"]
+include = ["marl*", "reproduction*"]
+
+[tool.setuptools.package-data]
+"reproduction.sn_mappo" = ["configs/*.yaml", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

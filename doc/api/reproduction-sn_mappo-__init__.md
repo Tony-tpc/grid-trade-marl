@@ -1,10 +1,10 @@
-# marl/envs/__init__.py
+# reproduction/sn_mappo/__init__.py
 
 [手册首页](../README.md) · [全部 API](README.md)
 
-[打开源码](../../marl/envs/__init__.py)
+[打开源码](../../reproduction/sn_mappo/__init__.py)
 
-环境与算法之间的稳定接口及通用环境；论文专用环境位于 reproduction。
+SN-MAPPO 需求响应环境与复现实验的公共入口。
 
 本页由 `doc/tools/build_api.py` 生成；签名来自源码，说明优先引用 docstring。
 
